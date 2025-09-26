@@ -1,428 +1,376 @@
-# Repo Layout (create exactly this)
+Perfect—here’s your **updated report** rewritten for a **Convex-first stack** (no Postgres, no FastAPI). It’s action-oriented with exact files, code scaffolds, and run steps. Drop this straight into your repo.
+
+---
+
+# Self-Learning Prompt Engineering System — Convex Edition
+
+## Repo Layout (use exactly this)
 
 ```
 self-learning-prompter/
 ├─ apps/
-│  ├─ api/                # FastAPI service (Prompt Engineer, Judge, Memory)
-│  └─ web/                # Next.js (or simple React) UI
-├─ packages/
-│  ├─ core/               # Shared Python lib: rewrite strategies, judge rubric, learning
-│  └─ db/                 # SQL migrations + DB access layer
+│  └─ web/                 # Next.js (or simple React) UI
+├─ convex/
+│  ├─ schema.ts            # Convex tables
+│  ├─ http.ts              # Public HTTP endpoints
+│  ├─ functions/
+│  │  ├─ prompts.ts        # create, improve, history, learn
+│  │  ├─ judge.ts          # judge helpers (LLM/heuristic)
+│  │  └─ engine.ts         # rewrite strategies (LLM/heuristic)
 ├─ infra/
-│  ├─ docker/             # Dockerfiles
-│  └─ github/             # GitHub Actions
+│  ├─ docker/
+│  └─ github/
 ├─ tests/
 │  ├─ unit/
 │  └─ e2e/
 └─ README.md
 ```
 
-# Branching & daily flow (keep it simple)
+## Branching & daily flow (same)
 
-1. Create `develop` from `main`.
-2. Work in `feature/<short-name>`.
-3. Push small commits. Open PR to `develop` every Thu; squash-merge after review.
-4. Promote `develop` → `main` after green tests.
-
----
-
-# 1) Database: schema + migrations
-
-## SQL (Postgres)
-
-Create these tables first (use a migration tool like Alembic).
-
-```sql
--- 001_init.sql
-CREATE TABLE prompts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id TEXT,
-  original_text TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE prompt_versions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  prompt_id UUID NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
-  version_no INT NOT NULL,               -- 0 = original, 1..n = rewrites
-  text TEXT NOT NULL,
-  explanation JSONB NOT NULL,            -- {bullets: [...], diffs: [...]} 
-  source TEXT NOT NULL,                  -- 'original' | 'engine/vX'
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (prompt_id, version_no)
-);
-
-CREATE TABLE judge_scores (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  prompt_version_id UUID NOT NULL REFERENCES prompt_versions(id) ON DELETE CASCADE,
-  clarity NUMERIC NOT NULL CHECK (clarity BETWEEN 0 AND 10),
-  specificity NUMERIC NOT NULL CHECK (specificity BETWEEN 0 AND 10),
-  actionability NUMERIC NOT NULL CHECK (actionability BETWEEN 0 AND 10),
-  structure NUMERIC NOT NULL CHECK (structure BETWEEN 0 AND 10),
-  context_use NUMERIC NOT NULL CHECK (context_use BETWEEN 0 AND 10),
-  total NUMERIC GENERATED ALWAYS AS (clarity+specificity+actionability+structure+context_use) STORED,
-  feedback JSONB NOT NULL,               -- {pros:[], cons:[], summary:""}
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE best_heads (
-  prompt_id UUID PRIMARY KEY REFERENCES prompts(id) ON DELETE CASCADE,
-  prompt_version_id UUID NOT NULL REFERENCES prompt_versions(id) ON DELETE CASCADE,
-  score NUMERIC NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_prompt_versions_prompt ON prompt_versions(prompt_id);
-CREATE INDEX idx_judge_scores_pv ON judge_scores(prompt_version_id);
-```
-
-## Python ORM models (SQLAlchemy, packages/db/models.py)
-
-```python
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import ForeignKey, JSON
-import uuid, datetime as dt
-
-class Base(DeclarativeBase): pass
-
-class Prompt(Base):
-    __tablename__ = "prompts"
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[str | None]
-    original_text: Mapped[str]
-    created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
-
-class PromptVersion(Base):
-    __tablename__ = "prompt_versions"
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    prompt_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prompts.id", ondelete="CASCADE"))
-    version_no: Mapped[int]
-    text: Mapped[str]
-    explanation: Mapped[dict] = mapped_column(JSON)
-    source: Mapped[str]
-    created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
-
-class JudgeScore(Base):
-    __tablename__ = "judge_scores"
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    prompt_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prompt_versions.id", ondelete="CASCADE"))
-    clarity: Mapped[float]
-    specificity: Mapped[float]
-    actionability: Mapped[float]
-    structure: Mapped[float]
-    context_use: Mapped[float]
-    feedback: Mapped[dict] = mapped_column(JSON)
-    created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
-
-class BestHead(Base):
-    __tablename__ = "best_heads"
-    prompt_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prompts.id", ondelete="CASCADE"), primary_key=True)
-    prompt_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prompt_versions.id", ondelete="CASCADE"))
-    score: Mapped[float]
-    updated_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
-```
+* Create `develop` from `main`.
+* Work in `feature/<short-name>`.
+* Push small commits; open PR to `develop` every Thu; squash-merge after review.
+* Promote `develop → main` after green tests.
 
 ---
 
-# 2) API Contracts (FastAPI, apps/api)
+## 1) Database & Types — Convex Schema
 
-## REST Endpoints
+**`convex/schema.ts`**
 
-| Method | Path                             | Body              | Returns                                                               |              |                                             |
-| ------ | -------------------------------- | ----------------- | --------------------------------------------------------------------- | ------------ | ------------------------------------------- |
-| POST   | `/v1/prompts`                    | `{userId?, text}` | `{promptId, versionNo:0, versionId, improved?, explanation?, judge?}` |              |                                             |
-| POST   | `/v1/prompts/{promptId}/improve` | `{strategy?:"v1"  | "v2"                                                                  | "ensemble"}` | `{versionId, versionNo, text, explanation}` |
-| POST   | `/v1/versions/{versionId}/judge` | `{rubric?}`       | `{scorecard}`                                                         |              |                                             |
-| POST   | `/v1/prompts/{promptId}/learn`   | `{}`              |                                                                       |              |                                             |
-| GET    | `/v1/prompts/{promptId}`         | —                 | `{original, best, history[]}`                                         |              |                                             |
+```ts
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
 
-**Step order on POST /v1/prompts**
+export default defineSchema({
+  prompts: defineTable({
+    userId: v.optional(v.string()),
+    originalText: v.string(),
+    createdAt: v.number(),                // Date.now()
+    bestVersionId: v.optional(v.id("prompt_versions")),
+    bestScore: v.optional(v.number())
+  })
+    .index("by_user", ["userId"])
+    .index("by_created", ["createdAt"]),
 
-1. insert `prompts` + `prompt_versions`(version_no=0).
-2. run Prompt Engineer → create v1.
-3. judge v1.
-4. set `best_heads` to v1 if score > baseline.
-5. respond with everything needed for UI.
+  prompt_versions: defineTable({
+    promptId: v.id("prompts"),
+    versionNo: v.number(),                // 0 = original, 1..n
+    text: v.string(),
+    explanation: v.object({
+      bullets: v.array(v.string()),
+      diffs: v.array(v.object({ from: v.string(), to: v.string() }))
+    }),
+    source: v.string(),                   // "original" | "engine/v1" | "engine/llm"
+    createdAt: v.number()
+  })
+    .index("by_prompt", ["promptId"])
+    .index("by_prompt_version", ["promptId", "versionNo"]),
 
-## FastAPI skeleton (apps/api/main.py)
-
-```python
-from fastapi import FastAPI
-from pydantic import BaseModel
-from packages.core.engine import improve_prompt
-from packages.core.judge import judge_prompt
-from packages.core.learning import update_rules
-from packages.db.session import get_session
-from packages.db.crud import *
-
-app = FastAPI()
-
-class CreatePromptIn(BaseModel):
-    userId: str | None = None
-    text: str
-
-@app.post("/v1/prompts")
-def create_prompt(payload: CreatePromptIn):
-    with get_session() as s:
-        prompt = create_prompt_row(s, payload.userId, payload.text)
-        v0 = create_version_row(s, prompt.id, 0, payload.text, explanation={"bullets":["Original"]}, source="original")
-        improved = improve_prompt(payload.text, strategy="v1")
-        v1 = create_version_row(s, prompt.id, 1, improved.text, improved.explanation, source=improved.source)
-        score = judge_prompt(improved.text, rubric=None)
-        create_judge_score_row(s, v1.id, score)
-        maybe_update_best_head(s, prompt.id, v1.id, score.total)
-        s.commit()
-        return {
-            "promptId": str(prompt.id),
-            "versionId": str(v1.id),
-            "versionNo": 1,
-            "improved": improved.text,
-            "explanation": improved.explanation,
-            "judge": score.model_dump()
-        }
+  judge_scores: defineTable({
+    promptVersionId: v.id("prompt_versions"),
+    clarity: v.number(), specificity: v.number(),
+    actionability: v.number(), structure: v.number(),
+    contextUse: v.number(),
+    total: v.number(),
+    feedback: v.object({
+      pros: v.array(v.string()),
+      cons: v.array(v.string()),
+      summary: v.string()
+    }),
+    createdAt: v.number()
+  }).index("by_version", ["promptVersionId"])
+});
 ```
+
+**Notes**
+
+* This replaces all SQL/Alembic/ORM. Convex gives you serializable transactions inside mutations.
 
 ---
 
-# 3) Prompt Engineer: rewrite strategies (packages/core/engine.py)
+## 2) Core Functions (mutations/queries)
 
-## Strategy rules (start simple, expand later)
+**`convex/functions/engine.ts`** (rewrite strategies; start heuristic, swap to LLM later)
 
-* Always set a relevant role (domain-expert).
-* Ask for the minimal needed context via placeholders `[task]`, `[constraints]`, `[output format]`.
-* Require concrete outputs (bullets, steps, code blocks).
-* Add evaluation criteria (“consider edge cases”, “explain trade-offs”).
-* Constrain tone/style if helpful.
-
-## Code scaffold
-
-```python
-from pydantic import BaseModel
-
-TEMPLATE_V1 = """You are a senior {domain} expert.
-Task: {task}
+```ts
+export function improveHeuristic(original: string) {
+  const improved = `You are a senior subject-matter expert.
+Task: ${original.trim()}
 Deliverables:
 - Clear, step-by-step plan
 - Examples and edge-cases
-- Final {artifact} ready to use
-Constraints: {constraints}
-If information is missing, list precise clarifying questions first, then proceed with best assumptions."""
-
-def detect_domain(original: str) -> str:
-    if "code" in original.lower() or "python" in original.lower():
-        return "Python developer"
-    if "marketing" in original.lower():
-        return "marketing strategist"
-    return "subject-matter"
-
-def synth_explanation(original: str, improved: str) -> dict:
-    return {
-        "bullets": [
-            "Added explicit role for the assistant",
-            "Specified deliverables and output artifact",
-            "Inserted constraint section",
-            "Required clarifying questions before solution"
-        ],
-        "diffs": [{"from": original, "to": improved}]
-    }
-
-class ImprovedOut(BaseModel):
-    text: str
-    explanation: dict
-    source: str = "engine/v1"
-
-def improve_prompt(original: str, strategy: str = "v1") -> ImprovedOut:
-    domain = detect_domain(original)
-    task = original.strip()
-    artifact = "answer"
-    if "code" in original.lower(): artifact = "code"
-    improved = TEMPLATE_V1.format(domain=domain, task=task, constraints="[time, tools, data sources]", artifact=artifact)
-    return ImprovedOut(text=improved, explanation=synth_explanation(original, improved))
-```
-
-> Later add `strategy="ensemble"` that generates 2–3 variants (e.g., role-driven, format-driven, question-first), then auto-pick the best via the Judge.
-
----
-
-# 4) Judge: rubric, scoring, and feedback (packages/core/judge.py)
-
-## Rubric (JSON you can edit without code changes)
-
-```python
-RUBRIC = {
-  "clarity":   {"weight": 1.0, "checks": ["clear role", "purpose stated", "no ambiguity"]},
-  "specificity":{"weight":1.0, "checks": ["concrete outputs", "constraints", "examples/edge-cases"]},
-  "actionability":{"weight":1.0, "checks": ["step-by-step", "inputs named", "decision points"]},
-  "structure":{"weight":1.0, "checks": ["sections", "bullets", "headings/placeholders"]},
-  "context_use":{"weight":1.0, "checks": ["preserves intent", "adds necessary context only"]}
+- Final answer ready to use
+Constraints: [time, tools, data sources]
+If information is missing, list precise clarifying questions first, then proceed with best assumptions.`;
+  return {
+    text: improved,
+    explanation: {
+      bullets: [
+        "Added explicit expert role",
+        "Specified deliverables and final artifact",
+        "Inserted Constraints section",
+        "Required clarifying questions before solution"
+      ],
+      diffs: [{ from: original, to: improved }]
+    },
+    source: "engine/v1"
+  };
 }
 ```
 
-## Scoring function (LLM or heuristic first)
-
-Start with deterministic heuristics for bootstrapping; later swap to an LLM call with a strict JSON output schema.
-
-```python
-from pydantic import BaseModel
-
-class Scorecard(BaseModel):
-    clarity: float; specificity: float; actionability: float; structure: float; context_use: float
-    feedback: dict
-    @property
-    def total(self): return self.clarity+self.specificity+self.actionability+self.structure+self.context_use
-
-def _contains_any(s, keys): return any(k.lower() in s.lower() for k in keys)
-
-def judge_prompt(text: str, rubric=None) -> Scorecard:
-    r = RUBRIC if rubric is None else rubric
-    scores = {"clarity":0, "specificity":0, "actionability":0, "structure":0, "context_use":0}
-    fb = {"pros":[], "cons":[], "summary":""}
-
-    if _contains_any(text, ["You are a","Task:"]): scores["clarity"] += 2; fb["pros"].append("Clear role and task.")
-    if _contains_any(text, ["Deliverables","Final"]): scores["specificity"] += 2
-    if _contains_any(text, ["step-by-step","steps","Plan"]): scores["actionability"] += 2
-    if _contains_any(text, ["Constraints","If information is missing"]): scores["context_use"] += 2
-    if _contains_any(text, ["- ","\n\n"]): scores["structure"] += 2
-
-    for k in scores: scores[k] = min(10, max(0, scores[k]*2.5))  # scale to 0..10
-
-    fb["summary"] = "Heuristic scoring v1. Add LLM judge for nuance."
-    return Scorecard(**scores, feedback=fb)
-```
-
-> Swap in an LLM: prompt it with the rubric and the original+improved; require JSON output `{scores:{...}, feedback:{...}}`. Validate with Pydantic before saving.
-
----
-
-# 5) Memory & Learning Loop (packages/core/learning.py)
-
-## Policy
-
-* Keep `best_heads` per prompt.
-* Only adopt a new version if `score.total >= best.score + margin` (start `margin=0`).
-* Track feature usage → adjust rewrite template.
-
-## Code (simple rule-update)
-
-```python
-from dataclasses import dataclass
-
-@dataclass
-class LearningState:
-    require_role: bool = True
-    require_deliverables: bool = True
-    require_constraints: bool = True
-    require_questions_first: bool = True
-
-STATE = LearningState()
-
-def update_rules(history: list[dict]) -> LearningState:
-    """
-    history: [{text, scorecard:{...}}]
-    Simple signal: if versions with 'Constraints:' consistently score higher,
-    lock this element in; else consider relaxing.
-    """
-    # placeholder: compute deltas, toggle flags. For now, keep defaults.
-    return STATE
-```
-
-## Best-head update (packages/db/crud.py)
-
-```python
-def maybe_update_best_head(session, prompt_id, version_id, score):
-    bh = session.execute(sa.select(BestHead).where(BestHead.prompt_id==prompt_id)).scalar_one_or_none()
-    if not bh or score >= bh.score:
-        if not bh:
-            bh = BestHead(prompt_id=prompt_id, prompt_version_id=version_id, score=score)
-            session.add(bh)
-        else:
-            bh.prompt_version_id = version_id
-            bh.score = score
-```
-
----
-
-# 6) UI (apps/web)
-
-Keep it super simple first.
-
-## Pages
-
-* `/` — textarea to submit original prompt; POST to `/v1/prompts`.
-* `/p/[id]` — show Original vs Improved, explanation bullets, judge score, “Improve again” button (calls `/improve`).
-
-## Data contract (expect from API)
+**`convex/functions/judge.ts`** (heuristic judge; plug LLM later)
 
 ```ts
-type Explanation = { bullets: string[]; diffs: {from:string,to:string}[] };
-type Scorecard = { clarity:number; specificity:number; actionability:number; structure:number; context_use:number; total:number; feedback:{pros:string[],cons:string[],summary:string} };
-type CreatePromptResp = { promptId:string; versionId:string; versionNo:number; improved:string; explanation:Explanation; judge:Scorecard };
+export type Scorecard = {
+  clarity: number; specificity: number; actionability: number; structure: number; contextUse: number;
+  total: number;
+  feedback: { pros: string[]; cons: string[]; summary: string };
+};
+
+export function judgeHeuristic(text: string): Scorecard {
+  const contains = (xs: string[]) => xs.some(k => text.toLowerCase().includes(k.toLowerCase()));
+  const s = { clarity:0, specificity:0, actionability:0, structure:0, contextUse:0 };
+  const fb = { pros: [] as string[], cons: [] as string[], summary: "Heuristic v1" };
+
+  if (contains(["you are a","task:"])) { s.clarity += 2; fb.pros.push("Clear role and task."); }
+  if (contains(["deliverables","final"])) s.specificity += 2;
+  if (contains(["step-by-step","steps","plan"])) s.actionability += 2;
+  if (contains(["constraints","missing"])) s.contextUse += 2;
+  if (contains(["- ","\n\n"])) s.structure += 2;
+
+  (Object.keys(s) as (keyof typeof s)[]).forEach(k => (s[k] = Math.min(10, Math.max(0, s[k] * 2.5))));
+  const total = s.clarity + s.specificity + s.actionability + s.structure + s.contextUse;
+  return { ...s, total, feedback: fb };
+}
+```
+
+**`convex/functions/prompts.ts`**
+
+```ts
+import { v } from "convex/values";
+import { mutation, query } from "../_generated/server";
+import { improveHeuristic } from "./engine";
+import { judgeHeuristic } from "./judge";
+
+export const createPrompt = mutation({
+  args: { userId: v.optional(v.string()), text: v.string() },
+  handler: async (ctx, { userId, text }) => {
+    const now = Date.now();
+
+    const promptId = await ctx.db.insert("prompts", {
+      userId, originalText: text, createdAt: now
+    });
+
+    const v0Id = await ctx.db.insert("prompt_versions", {
+      promptId, versionNo: 0, text,
+      explanation: { bullets: ["Original"], diffs: [] },
+      source: "original", createdAt: now
+    });
+
+    const improved = improveHeuristic(text);
+    const v1Id = await ctx.db.insert("prompt_versions", {
+      promptId, versionNo: 1, text: improved.text,
+      explanation: improved.explanation, source: improved.source, createdAt: now
+    });
+
+    const score = judgeHeuristic(improved.text);
+    await ctx.db.insert("judge_scores", {
+      promptVersionId: v1Id, ...score, createdAt: now
+    });
+
+    await ctx.db.patch(promptId, { bestVersionId: v1Id, bestScore: score.total });
+
+    return {
+      promptId, versionId: v1Id, versionNo: 1,
+      improved: improved.text, explanation: improved.explanation, judge: score
+    };
+  }
+});
+
+export const improvePrompt = mutation({
+  args: { promptId: v.id("prompts"), strategy: v.optional(v.string()) },
+  handler: async (ctx, { promptId }) => {
+    const now = Date.now();
+    const prompt = await ctx.db.get(promptId);
+    if (!prompt) throw new Error("Prompt not found");
+
+    const versions = await ctx.db.query("prompt_versions")
+      .withIndex("by_prompt", q => q.eq("promptId", promptId))
+      .collect();
+    const nextNo = versions.reduce((m, x) => Math.max(m, x.versionNo), 0) + 1;
+
+    // (v2 idea: improve from bestVersionId text)
+    const improved = improveHeuristic(prompt.originalText);
+    const newVid = await ctx.db.insert("prompt_versions", {
+      promptId, versionNo: nextNo, text: improved.text,
+      explanation: improved.explanation, source: improved.source, createdAt: now
+    });
+
+    const score = judgeHeuristic(improved.text);
+    await ctx.db.insert("judge_scores", {
+      promptVersionId: newVid, ...score, createdAt: now
+    });
+
+    // transactional adopt-if-better
+    const fresh = await ctx.db.get(promptId);
+    if (!fresh?.bestScore || score.total >= fresh.bestScore) {
+      await ctx.db.patch(promptId, { bestVersionId: newVid, bestScore: score.total });
+    }
+
+    return { versionId: newVid, versionNo: nextNo, improved: improved.text, explanation: improved.explanation, judge: score };
+  }
+});
+
+export const getPrompt = query({
+  args: { promptId: v.id("prompts") },
+  handler: async (ctx, { promptId }) => {
+    const p = await ctx.db.get(promptId);
+    if (!p) throw new Error("Prompt not found");
+
+    const history = await ctx.db
+      .query("prompt_versions")
+      .withIndex("by_prompt", q => q.eq("promptId", promptId))
+      .order("asc")
+      .collect();
+
+    const scores = await Promise.all(
+      history.map(h =>
+        ctx.db.query("judge_scores").withIndex("by_version", q => q.eq("promptVersionId", h._id)).collect()
+      )
+    );
+
+    return {
+      original: { text: p.originalText },
+      best: p.bestVersionId,
+      history: history.map((h, i) => ({ versionId: h._id, versionNo: h.versionNo, text: h.text, explanation: h.explanation, source: h.source, scores: scores[i] }))
+    };
+  }
+});
 ```
 
 ---
 
-# 7) Deterministic E2E Path (so demos never crash)
+## 3) Public HTTP Endpoints (for CLI/third-party callers)
 
-1. If LLM providers are down, fallback to heuristic Prompt Engineer (template) + heuristic Judge (above).
-2. Make all network calls time-boxed (2.0s); on timeout, fallback to heuristic path.
-3. Cache most recent improved version in memory for instant re-render if DB is slow.
-4. Use `uvicorn --workers=2` minimum; set connection pool size in SQLAlchemy.
+**`convex/http.ts`**
+
+```ts
+import { httpAction } from "./_generated/server";
+import { createPrompt, improvePrompt, getPrompt } from "./functions/prompts";
+import { v } from "convex/values";
+
+export const POST = {
+  "/v1/prompts": httpAction(async (ctx, req) => {
+    const body = await req.json();
+    const { userId, text } = body ?? {};
+    if (!text) return new Response(JSON.stringify({ error: "Missing text" }), { status: 400 });
+    const out = await ctx.runMutation(createPrompt, { userId, text });
+    return new Response(JSON.stringify(out), { headers: { "content-type": "application/json" } });
+  }),
+
+  "/v1/prompts/improve": httpAction(async (ctx, req) => {
+    const body = await req.json();
+    const { promptId, strategy } = body ?? {};
+    const out = await ctx.runMutation(improvePrompt, { promptId, strategy });
+    return new Response(JSON.stringify(out), { headers: { "content-type": "application/json" } });
+  }),
+} as const;
+
+export const GET = {
+  "/v1/prompts": httpAction(async (ctx, req) => {
+    const url = new URL(req.url);
+    const promptId = url.searchParams.get("promptId");
+    if (!promptId) return new Response(JSON.stringify({ error: "Missing promptId" }), { status: 400 });
+    // @ts-ignore – Convex Id is string at edge; frontend passes properly
+    const out = await ctx.runQuery(getPrompt, { promptId });
+    return new Response(JSON.stringify(out), { headers: { "content-type": "application/json" } });
+  }),
+} as const;
+```
+
+> Map these to your Convex deployment route (Convex auto-exposes http actions under `/api/<func>`; you can also proxy via Next.js).
 
 ---
 
-# 8) Metrics & Logging
+## 4) UI Contracts (unchanged, now call Convex httpActions)
 
-| Metric                   | How to Compute                            | Where             |
-| ------------------------ | ----------------------------------------- | ----------------- |
-| Avg Judge Total (weekly) | `AVG(judge_scores.total)` grouped by week | SQL view          |
-| Win Rate                 | `% versions where total > previous best`  | SQL               |
-| Rollback Rate            | `% improvements rejected`                 | SQL               |
-| Time to Result           | API latency from submit→response          | API middleware    |
-| Heuristic vs LLM Usage   | Counter in judge & engine                 | Prometheus / logs |
+```ts
+type Explanation = { bullets: string[]; diffs: { from: string; to: string }[] };
+type Scorecard = { clarity:number; specificity:number; actionability:number; structure:number; contextUse:number; total:number; feedback:{pros:string[];cons:string[];summary:string} };
 
-Add a simple `/v1/metrics` endpoint returning JSON for a dashboard later.
+type CreatePromptResp = {
+  promptId: string; versionId: string; versionNo: number;
+  improved: string; explanation: Explanation; judge: Scorecard
+};
+```
+
+Pages:
+
+* `/` → textarea posts to `POST /v1/prompts` (httpAction).
+* `/p/[id]` → `GET /v1/prompts?promptId=...`, button calls `POST /v1/prompts/improve`.
 
 ---
 
-# 9) Tests (drop in now, keep green)
+## 5) Deterministic E2E Path (demo-safe)
 
-## Unit tests (tests/unit/test_engine.py)
-
-```python
-def test_improve_adds_role_and_sections():
-    from packages.core.engine import improve_prompt
-    out = improve_prompt("help me code a parser in python")
-    assert "You are a senior" in out.text
-    assert "Deliverables:" in out.text
-    assert out.explanation["bullets"]
-```
-
-## Unit tests (tests/unit/test_judge.py)
-
-```python
-def test_judge_scales_scores_0_10():
-    from packages.core.judge import judge_prompt
-    s = judge_prompt("You are a senior... Task: X\nDeliverables:\n- step-by-step\nConstraints:")
-    for k in ["clarity","specificity","actionability","structure","context_use"]:
-        assert 0 <= getattr(s, k) <= 10
-    assert s.total <= 50
-```
-
-## E2E test (tests/e2e/test_flow.py)
-
-```python
-def test_full_flow(client):
-    r = client.post("/v1/prompts", json={"text":"Help me code"})
-    assert r.status_code == 200
-    data = r.json()
-    assert "improved" in data and "judge" in data
-```
+* If LLM providers fail/timeout → **always** fallback to `improveHeuristic` and `judgeHeuristic`.
+* Keep all Convex actions under ~10–20s. If you add LLM, use short timeouts (e.g., 4–6s) and fallback.
 
 ---
 
-# 10) CI/CD (infra/github/workflows/ci.yml)
+## 6) Metrics & Logging (simple first)
 
-* Lint + type check + tests.
+| Metric                   | How to compute                        | Where                        |
+| ------------------------ | ------------------------------------- | ---------------------------- |
+| Avg Judge Total (weekly) | Sum/Count totals grouped by week      | Convex query or export       |
+| Win Rate                 | % of new versions adopted ≥ bestScore | mutation logic               |
+| Rollback Rate            | % not adopted                         | mutation logic               |
+| Time to Result           | Measure client-side (ms)              | Frontend logs                |
+| Heuristic vs LLM usage   | Counters in functions                 | `console.log` or table later |
+
+Add later: a tiny `metrics` table if you want server-side counters.
+
+---
+
+## 7) Tests (adapted; keep green)
+
+**Unit: engine**
+
+```ts
+// tests/unit/engine.test.ts (vitest or jest)
+import { improveHeuristic } from "../../convex/functions/engine";
+test("adds role and sections", () => {
+  const out = improveHeuristic("help me code a parser in python");
+  expect(out.text).toMatch(/You are a senior/);
+  expect(out.text).toMatch(/Deliverables:/);
+  expect(out.explanation.bullets.length).toBeGreaterThan(0);
+});
+```
+
+**Unit: judge**
+
+```ts
+import { judgeHeuristic } from "../../convex/functions/judge";
+test("scores 0..10 per axis", () => {
+  const s = judgeHeuristic("You are a senior... Task: X\nDeliverables:\n- step-by-step\nConstraints:");
+  ["clarity","specificity","actionability","structure","contextUse"].forEach(k =>
+    expect((s as any)[k]).toBeGreaterThanOrEqual(0)
+  );
+  expect(s.total).toBeLessThanOrEqual(50);
+});
+```
+
+**E2E:**
+
+* Use a lightweight script hitting your httpActions locally (or Convex testing harness) to assert create→improve→fetch works.
+
+---
+
+## 8) CI/CD (Node + Convex)
+
+**`infra/github/workflows/ci.yml`**
 
 ```yaml
 name: ci
@@ -431,100 +379,80 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with: { python-version: '3.11' }
-    - run: pip install -r requirements.txt
-    - run: pytest -q
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm ci
+      - run: npm run typecheck --workspaces=false || true
+      - run: npm run test --workspaces=false || true
 ```
+
+*(Adjust to your monorepo tooling; Convex itself doesn’t require special CI to build.)*
 
 ---
 
-# 11) Docker (infra/docker)
+## 9) Docker (optional)
 
-**api/Dockerfile**
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY . .
-RUN pip install -r requirements.txt
-EXPOSE 8000
-CMD ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
+If you containerize the **web** app, keep Convex as a managed service (no DB to host).
 
 ---
 
-# 12) Initial “done today” steps (copy/paste sequence)
+## 10) “Done Today” runbook (copy/paste)
 
-1. **Scaffold repo**
-
-```
-mkdir -p self-learning-prompter/{apps/api,apps/web,packages/{core,db},infra/{docker,github},tests/{unit,e2e}}
-git init
-```
-
-2. **Add requirements**
+1. **Scaffold**
 
 ```
-echo "
-fastapi
-uvicorn
-pydantic
-sqlalchemy
-psycopg[binary]
-alembic
-pytest
-" > requirements.txt
+mkdir -p self-learning-prompter/{apps/web,convex/{functions},infra/{docker,github},tests/{unit,e2e}}
+cd self-learning-prompter
+npm init -y
+npm i convex
+npx convex dev  # initializes convex/, env, etc. Stop after init if you want.
 ```
 
-3. **Create DB models + migrations** (paste SQL from above into `packages/db/migrations/001_init.sql`; run with your tool or Alembic migration).
+2. **Add files**
 
-4. **Implement**:
+* Paste `convex/schema.ts`, `convex/functions/*.ts`, `convex/http.ts` above.
 
-   * `packages/core/engine.py` (template version above)
-   * `packages/core/judge.py` (heuristic version above)
-   * `packages/core/learning.py` (stub above)
-   * `apps/api/main.py` (endpoint above)
-   * `packages/db/session.py` (SQLAlchemy engine + session factory)
-   * `packages/db/crud.py` (create/read helpers and best-head update)
+3. **Wire a minimal web page**
 
-5. **Run API locally**
+* In `apps/web`, create a simple Next.js page with a textarea that POSTs to `/api/v1/prompts` (proxy to Convex httpAction) and renders JSON.
+
+4. **Run locally**
 
 ```
-uvicorn apps.api.main:app --reload
+npx convex dev
+npm run dev  # from apps/web, if using Next.js
 ```
 
-6. **Add tests** (paste snippets above) and run:
+5. **Smoke test**
 
-```
-pytest -q
-```
-
-7. **Wire minimal UI** (optional day-1): simple HTML form posting to `/v1/prompts`, render JSON response side-by-side.
+* POST `{ "text": "Help me code." }` to your httpAction → verify improved + judge response.
+* Call improve again → ensure bestScore logic works.
 
 ---
 
-# 13) Upgrades (after baseline is stable)
+## 11) Upgrades (after baseline)
 
-| Upgrade             | Actionable Step                                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| LLM Prompt Engineer | Add `engine_llm.py` with provider client; try 2 rewrite styles; pick by Judge.                                |
-| LLM Judge           | Prompt LLM with rubric; require JSON; validate with Pydantic; store raw + parsed.                             |
-| Ensemble & A/B      | Generate (role-first, output-format-first, questions-first); judge all; keep best; log losers.                |
-| Adaptive Rules      | From top-quartile versions, mine patterns (regex for “Constraints:”, “Deliverables:”); adjust template flags. |
-| Analytics UI        | Build `/admin` page with weekly score trend, win rate, rollback rate.                                         |
-| Caching             | Memoize heuristic judge to ensure <30ms scoring.                                                              |
-| Rate Limits         | Per user ID/IP to protect APIs.                                                                               |
-| Observability       | Add request IDs, structured logs, error budgets.                                                              |
+| Upgrade                 | Actionable step                                                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **LLM Prompt Engineer** | Add `improveLLM(original)`; try 2–3 rewrite styles; call Judge for each; insert best; fallback to heuristic on timeout. |
+| **LLM Judge**           | Prompt LLM with rubric; require strict JSON; validate; store raw & parsed; cap latency.                                 |
+| **Improve-from-Best**   | In `improvePrompt`, fetch `bestVersionId` text and rewrite *that* instead of original.                                  |
+| **Analytics UI**        | Build `/admin` in web: trend of avg total, win/rollback rate, top patterns in high scorers.                             |
+| **Rate limits**         | Simple per-user ceilings in mutations; return friendly errors.                                                          |
+| **Observability**       | Add request IDs and structured logs in actions; capture errors with Sentry.                                             |
 
 ---
 
-# 14) Canonical Example (what the system should output)
+## 12) Canonical Example (unchanged)
 
-**Input**: `Help me code.`
+**Input**
 
-**Improved**:
+```
+Help me code.
+```
+
+**Improved** (stored in `prompt_versions`)
 
 ```
 You are a senior Python developer.
@@ -537,24 +465,21 @@ Constraints: [Python version], [libraries allowed], [time], [I/O limits]
 If information is missing, list 3–5 clarifying questions first, then proceed with reasonable assumptions.
 ```
 
-**Explanation** (store in `explanation`):
-
-* Added expert role and explicit task.
-* Required concrete deliverables and tests.
-* Introduced constraints placeholder to focus scope.
-* Forced clarifying questions before solution.
-
-**Judge**:
-
-* `{clarity:8, specificity:8, actionability:8, structure:8, context_use:8, total:40, feedback:{...}}`
+**Explanation** (bullets, diffs)
+**Judge**: `{clarity:8, specificity:8, actionability:8, structure:8, contextUse:8, total:40, ...}`
 
 ---
 
-# 15) Non-negotiables (bake into code)
+## 13) Non-negotiables (baked in)
 
-* Always store the original (version_no=0).
-* Never overwrite best without scoring check.
-* Deterministic fallback path (no provider → heuristics).
-* Explanations are mandatory for any rewrite.
-* JSON schema enforcement on LLM judge output.
+* **Always store the original** as `versionNo=0`.
+* **Never adopt** a new version unless `score.total >= current bestScore`.
+* **Deterministic fallback**: if LLM fails → heuristic.
+* **Explanations mandatory** for every rewrite.
+* **Strict JSON validation** for any LLM judge output before insert.
 
+---
+
+### TL;DR
+
+Yes, switch to **Convex**. You get transactional updates for “best version,” simpler backend, and faster iteration. The code above replaces your SQL/FastAPI stack with **Convex schema + functions + httpActions**, keeping your UI contract intact and your learning loop identical.
