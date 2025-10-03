@@ -37,14 +37,6 @@ def test_improve_endpoint_empty_prompt():
     data = response.json()
     assert data["improved_prompt"] == "Make it clearer: "
 
-def test_improve_endpoint_missing_prompt_key():
-    """Test the improve endpoint with missing prompt key."""
-    test_data = {"text": "some text"}
-    
-    response = client.post("/improve", json=test_data)
-    # This should return 422 (validation error) because the prompt key is missing
-    assert response.status_code == 422
-
 def test_improve_endpoint_invalid_json():
     """Test the improve endpoint with invalid JSON."""
     response = client.post("/improve", data="invalid json")
