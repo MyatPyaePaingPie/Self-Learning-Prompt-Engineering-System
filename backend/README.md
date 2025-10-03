@@ -9,12 +9,16 @@ Simple API service for prompt improvement.
    ```bash
    pip install -r requirements.txt
 
+   (Windows)
+   python -m pip install -r requirements.txt 
+
 2. Install dependencies:
 
    ```bash
    uvicorn api:app --reload
 
-
+   (Windows)
+   python -m uvicorn api:app --reload
 
 3. Open your browser to: http://127.0.0.1:8000
 
