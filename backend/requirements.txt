@@ -2,6 +2,6 @@ fastapi
 uvicorn
 pydantic
 sqlalchemy
-psycopg[binary]
+psycopg2-binary
 alembic
 pytest
