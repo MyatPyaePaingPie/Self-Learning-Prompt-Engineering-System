@@ -103,8 +103,8 @@ Follow the [Installation](#installation) section below.
 ### Prerequisites
 
 - Python 3.11 or higher
-- PostgreSQL 15 or higher (for database persistence)
 - pip (Python package manager)
+- SQLite (built into Python - no installation needed)
 
 ### Step 1: Clone the Repository
 
@@ -184,44 +184,32 @@ pip install -r requirements.txt
 cd ..
 ```
 
-### Step 4: Setup Database (Optional)
+### Step 4: Setup Database
 
-If you want to use database persistence:
-
-**Create PostgreSQL Database:**
-
-**Windows:**
-```powershell
-# Using PostgreSQL command line
-psql -U postgres
-CREATE DATABASE prompter_db;
-\q
-
-# Run migrations
-psql -U postgres -d prompter_db -f packages\db\migrations\001_init.sql
-```
-
-**Mac/Linux:**
-```bash
-# Using PostgreSQL command line
-psql -U postgres
-CREATE DATABASE prompter_db;
-\q
-
-# Run migrations
-psql -U postgres -d prompter_db -f packages/db/migrations/001_init.sql
-```
-
-**Set Database URL (Environment Variable):**
+Create the SQLite database (built into Python, no server needed):
 
 **Windows (PowerShell):**
 ```powershell
-$env:DATABASE_URL = "postgresql://postgres:password@localhost:5432/prompter_db"
+python -c "from packages.db.models import Base; from packages.db.session import engine; Base.metadata.create_all(engine)"
 ```
 
 **Mac/Linux:**
 ```bash
-export DATABASE_URL="postgresql://postgres:password@localhost:5432/prompter_db"
+python -c "from packages.db.models import Base; from packages.db.session import engine; Base.metadata.create_all(engine)"
+```
+
+This creates a `prompter.db` file in your project root with all necessary tables.
+
+**Optional: Use a different database location:**
+
+**Windows (PowerShell):**
+```powershell
+$env:DATABASE_URL = "sqlite:///./my_custom.db"
+```
+
+**Mac/Linux:**
+```bash
+export DATABASE_URL="sqlite:///./my_custom.db"
 ```
 
 ---
@@ -348,7 +336,7 @@ pytest tests/ -v
 
 ## File Formats
 
-### 1. Database Schema (PostgreSQL)
+### 1. Database Schema (SQLite)
 
 The system uses four main tables:
 
@@ -384,6 +372,11 @@ The system uses four main tables:
   - `prompt_version_id` (UUID, Foreign Key)
   - `score` (NUMERIC)
   - `updated_at` (TIMESTAMPTZ)
+
+**Database File:**
+- SQLite database stored in `prompter.db` at project root
+- No server installation required
+- Portable - can copy the .db file to backup/share data
 
 ### 2. File Storage Format
 

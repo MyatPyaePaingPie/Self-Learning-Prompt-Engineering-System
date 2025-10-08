@@ -363,21 +363,25 @@ INFO:     127.0.0.1:xxxxx - "POST /v1/prompts HTTP/1.1" 200 OK
 
 ✅ **Backend can use Judge**
 
-### **Connection 4: Backend → Database** ⚠️
+### **Connection 4: Backend → Database** ✅
 
 **Test:** Backend saves to database
 
 **What happens:**
 - `backend/api.py` line 45: `prompt = create_prompt_row(s, payload.userId, payload.text)`
 - Calls `packages/db/crud.py` functions
-- Saves to PostgreSQL
+- Saves to SQLite database (`prompter.db`)
 
-**Check:** Run this query (if you have PostgreSQL set up):
-```sql
-SELECT * FROM prompts ORDER BY created_at DESC LIMIT 5;
+**Check:** The database file exists and has data:
+```powershell
+# Check if database file exists
+Test-Path prompter.db
+
+# Query the database (optional)
+python -c "from packages.db.session import get_session; from packages.db.crud import *; import sys; s = get_session().__enter__(); prompts = list_prompts(s); print(f'Total prompts: {len(prompts)}'); [print(f'- {p.id}: {p.original_text[:50]}...') for p in prompts[:5]]"
 ```
 
-**If NO database:** The system will fail here. That's okay for Week 4 testing.
+**Database:** Uses SQLite (file-based, no server needed). The `prompter.db` file is created automatically.
 
 **Code Location:**
 - `backend/api.py` line 7 (import)
@@ -423,13 +427,13 @@ The backend does NOT currently use the file storage system. They are independent
 python -m uvicorn backend.api:app --reload
 ```
 
-### **Issue: "Module not found 'sqlalchemy'" or "psycopg2"**
+### **Issue: "Module not found 'sqlalchemy'"**
 
 **Problem:** Missing dependencies
 
 **Solution:**
 ```powershell
-python -m pip install sqlalchemy psycopg2-binary
+python -m pip install sqlalchemy
 ```
 
 ### **Issue: "streamlit is not recognized"**
@@ -447,36 +451,20 @@ python -m streamlit run apps/web/streamlit_app.py
 
 ### **Issue: Database errors in backend**
 
-**Problem:** Database not set up
+**Problem:** Database tables not created
 
-**Solution (Quick Fix - Disable Database):**
+**Solution:**
 
-Edit `backend/api.py` temporarily to skip database:
+Create the SQLite database tables:
 
-```python
-# Around line 40, comment out database code:
-@app.post("/v1/prompts", response_model=CreatePromptResponse)
-def create_prompt(payload: CreatePromptIn):
-    """Create a new prompt and automatically generate first improvement"""
-    try:
-        # Generate improvement (v1)
-        improved = improve_prompt(payload.text, strategy="v1")
-        
-        # Judge the improvement
-        score = judge_prompt(improved.text, rubric=None)
-        
-        # Return without database
-        return CreatePromptResponse(
-            promptId="test-id",
-            versionId="test-version",
-            versionNo=1,
-            improved=improved.text,
-            explanation=improved.explanation,
-            judge=score.model_dump()
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+```powershell
+# From project root
+python -c "from packages.db.models import Base; from packages.db.session import engine; Base.metadata.create_all(engine)"
 ```
+
+This creates `prompter.db` with all necessary tables.
+
+**If you see "no such table" errors:** Run the command above.
 
 ---
 

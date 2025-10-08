@@ -3,8 +3,8 @@ from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
 import os
 
-# Database URL from environment or default to local PostgreSQL
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/prompter_db")
+# Database URL from environment or default to SQLite (no server needed)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./prompter.db")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
