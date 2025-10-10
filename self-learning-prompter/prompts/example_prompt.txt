@@ -1,7 +1,0 @@
-# Metadata: {
-  "author": "Atang",
-  "type": "coding",
-  "difficulty": "beginner"
-}
-# Content:
-Help me write a Python function to calculate fibonacci numbers
