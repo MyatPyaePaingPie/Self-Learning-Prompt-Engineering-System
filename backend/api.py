@@ -7,6 +7,9 @@ from packages.core.learning import update_rules
 from packages.db.session import get_session
 from packages.db.crud import *
 
+from dotenv import load_dotenv
+load_dotenv()
+
 app = FastAPI(title="Self-Learning Prompt Engineering System", version="1.0.0")
 
 class CreatePromptIn(BaseModel):

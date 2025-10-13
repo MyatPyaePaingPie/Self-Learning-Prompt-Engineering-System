@@ -2,10 +2,13 @@
 
 A comprehensive system that automatically improves prompts through intelligent rewriting, scoring, and learning from feedback.
 
+> **🚀 New here?** Check out the [Quick Setup Guide](SETUP_GUIDE.md) for step-by-step instructions!
+
 ## Table of Contents
 - [Features](#features)
 - [Repository Structure](#repository-structure)
 - [Quick Start](#quick-start)
+- [Environment Setup](#environment-setup)
 - [Installation](#installation)
 - [Running the System](#running-the-system)
 - [Testing](#testing)
@@ -17,14 +20,14 @@ A comprehensive system that automatically improves prompts through intelligent r
 
 ## Features
 
-- **Automatic Prompt Improvement**: Uses strategic rewriting to enhance prompt clarity, specificity, and actionability
+- **Automatic Prompt Improvement**: Uses Groq's LLM API to enhance prompt clarity, specificity, and actionability
 - **Intelligent Scoring**: Multi-dimensional scoring system evaluating prompts on 5 key criteria
 - **Learning Loop**: Adapts improvement strategies based on performance feedback
 - **RESTful API**: Complete FastAPI backend with comprehensive endpoints
-- **Database Persistence**: PostgreSQL storage for prompts, versions, and scoring history
+- **Database Persistence**: SQLite storage for prompts, versions, and scoring history
 - **File Storage System**: Organized file storage for prompts and results with metadata support
 - **Web Interface**: Streamlit-based UI for easy interaction
-- **Deterministic Fallbacks**: Heuristic-based systems ensure reliability
+- **Deterministic Fallbacks**: Template-based systems ensure reliability when API is unavailable
 
 ---
 
@@ -79,12 +82,6 @@ Self-Learning-Prompt-Engineering-System/
 
 ### Option 1: Using Docker (Recommended)
 
-**Windows:**
-```powershell
-docker-compose up --build
-```
-
-**Mac/Linux:**
 ```bash
 docker-compose up --build
 ```
@@ -98,102 +95,107 @@ Follow the [Installation](#installation) section below.
 
 ---
 
+## Environment Setup
+
+### ⚠️ IMPORTANT: Groq API Key Required
+
+This system uses **Groq's LLM API** to improve prompts. You **must** set up your API key before running the system.
+
+### Step 1: Get Your Groq API Key
+
+1. Go to https://console.groq.com/
+2. Sign up or log in (it's free!)
+3. Navigate to API Keys section
+4. Create a new API key
+5. Copy the key (you'll need it in the next step)
+
+### Step 2: Create `.env` File
+
+Create a file named `.env` in the project root directory:
+
+```bash
+cd /path/to/Self-Learning-Prompt-Engineering-System
+touch .env
+```
+
+Add your API key to the `.env` file:
+
+```bash
+GROQ_API_KEY=your-actual-groq-api-key-here
+```
+
+**Example `.env` file:**
+```
+GROQ_API_KEY=gsk_abc123xyz456def789
+```
+
+### Step 3: Install python-dotenv
+
+The system needs this package to load environment variables:
+
+```bash
+pip install python-dotenv
+```
+
+---
+
 ## Installation
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- pip (Python package manager)
+- **Python 3.11 or higher**
+- **pip** (Python package manager)
+- **Groq API Key** (see [Environment Setup](#environment-setup))
 - SQLite (built into Python - no installation needed)
 
 ### Step 1: Clone the Repository
 
-**Windows (PowerShell):**
-```powershell
-git clone https://github.com/yourusername/Self-Learning-Prompt-Engineering-System.git
-cd Self-Learning-Prompt-Engineering-System
-```
-
-**Mac/Linux:**
 ```bash
 git clone https://github.com/yourusername/Self-Learning-Prompt-Engineering-System.git
 cd Self-Learning-Prompt-Engineering-System
 ```
 
-### Step 2: Create Virtual Environment (Recommended)
+### Step 2: Create Virtual Environment
 
-**Windows (PowerShell):**
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
-
-**Mac/Linux:**
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-### Step 3: Install Dependencies
+### Step 3: Set Up Environment Variables
 
-**Backend Dependencies:**
+**Create your `.env` file** (see [Environment Setup](#environment-setup) for details):
 
-**Windows:**
-```powershell
-cd backend
-python -m pip install -r requirements.txt
-cd ..
+```bash
+echo "GROQ_API_KEY=your-actual-api-key-here" > .env
 ```
 
-**Mac/Linux:**
+### Step 4: Install Dependencies
+
 ```bash
+# Install python-dotenv first
+pip install python-dotenv
+
+# Backend dependencies
 cd backend
 pip install -r requirements.txt
 cd ..
-```
 
-**Web Interface Dependencies:**
-
-**Windows:**
-```powershell
-cd apps\web
-python -m pip install -r requirements.txt
-cd ..\..
-```
-
-**Mac/Linux:**
-```bash
+# Web interface dependencies
 cd apps/web
 pip install -r requirements.txt
 cd ../..
-```
 
-**Test Dependencies (Optional):**
-
-**Windows:**
-```powershell
-cd tests
-python -m pip install -r requirements.txt
-cd ..
-```
-
-**Mac/Linux:**
-```bash
+# Test dependencies (optional)
 cd tests
 pip install -r requirements.txt
 cd ..
 ```
 
-### Step 4: Setup Database
+### Step 5: Setup Database
 
-Create the SQLite database (built into Python, no server needed):
+Create the SQLite database:
 
-**Windows (PowerShell):**
-```powershell
-python -c "from packages.db.models import Base; from packages.db.session import engine; Base.metadata.create_all(engine)"
-```
-
-**Mac/Linux:**
 ```bash
 python -c "from packages.db.models import Base; from packages.db.session import engine; Base.metadata.create_all(engine)"
 ```
@@ -202,12 +204,6 @@ This creates a `prompter.db` file in your project root with all necessary tables
 
 **Optional: Use a different database location:**
 
-**Windows (PowerShell):**
-```powershell
-$env:DATABASE_URL = "sqlite:///./my_custom.db"
-```
-
-**Mac/Linux:**
 ```bash
 export DATABASE_URL="sqlite:///./my_custom.db"
 ```
@@ -216,18 +212,21 @@ export DATABASE_URL="sqlite:///./my_custom.db"
 
 ## Running the System
 
+### ⚠️ Before Running
+
+Make sure you have:
+1. ✅ Created your `.env` file with `GROQ_API_KEY`
+2. ✅ Activated your virtual environment: `source venv/bin/activate`
+3. ✅ Installed all dependencies
+
 ### Running the Backend API
 
-**Windows (PowerShell):**
-```powershell
-cd backend
-python -m uvicorn api:app --reload --host 0.0.0.0 --port 8000
-```
+From the **project root directory**:
 
-**Mac/Linux:**
 ```bash
-cd backend
-uvicorn api:app --reload --host 0.0.0.0 --port 8000
+cd /path/to/Self-Learning-Prompt-Engineering-System
+source venv/bin/activate
+python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at: `http://localhost:8000`  
@@ -235,16 +234,11 @@ API documentation: `http://localhost:8000/docs`
 
 ### Running the Web Interface
 
-**Open a new terminal window/tab, then:**
+Open a new terminal window/tab:
 
-**Windows (PowerShell):**
-```powershell
-cd apps\web
-streamlit run streamlit_app.py
-```
-
-**Mac/Linux:**
 ```bash
+cd /path/to/Self-Learning-Prompt-Engineering-System
+source venv/bin/activate
 cd apps/web
 streamlit run streamlit_app.py
 ```
@@ -253,30 +247,21 @@ The web interface will be available at: `http://localhost:8501`
 
 ### Running Both Together
 
-**Windows (PowerShell) - Use two terminal windows:**
+Use two terminal windows:
 
-Terminal 1:
-```powershell
-cd backend
-python -m uvicorn api:app --reload
+**Terminal 1 (Backend):**
+```bash
+cd /path/to/Self-Learning-Prompt-Engineering-System
+source venv/bin/activate
+python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Terminal 2:
-```powershell
-cd apps\web
+**Terminal 2 (Frontend):**
+```bash
+cd /path/to/Self-Learning-Prompt-Engineering-System
+source venv/bin/activate
+cd apps/web
 streamlit run streamlit_app.py
-```
-
-**Mac/Linux - Use two terminal windows or tmux:**
-
-Terminal 1:
-```bash
-cd backend && uvicorn api:app --reload
-```
-
-Terminal 2:
-```bash
-cd apps/web && streamlit run streamlit_app.py
 ```
 
 ---
@@ -285,13 +270,6 @@ cd apps/web && streamlit run streamlit_app.py
 
 ### Running Unit Tests
 
-**Windows (PowerShell):**
-```powershell
-# From project root
-python -m pytest tests\unit\test_api.py -v
-```
-
-**Mac/Linux:**
 ```bash
 # From project root
 pytest tests/unit/test_api.py -v
@@ -301,33 +279,16 @@ pytest tests/unit/test_api.py -v
 
 **Note:** The backend must be running for integration tests.
 
-**Windows (PowerShell):**
-```powershell
-# Start backend first
-cd backend
-python -m uvicorn api:app --reload
-
-# In another terminal, run tests
-python -m pytest tests\integration\test_integration.py -v
-```
-
-**Mac/Linux:**
 ```bash
-# Start backend first
-cd backend && uvicorn api:app --reload &
+# Start backend first (in one terminal)
+python -m uvicorn backend.api:app --reload &
 
-# Run tests
+# Run tests (in another terminal)
 pytest tests/integration/test_integration.py -v
 ```
 
 ### Running All Tests
 
-**Windows:**
-```powershell
-python -m pytest tests\ -v
-```
-
-**Mac/Linux:**
 ```bash
 pytest tests/ -v
 ```
@@ -518,26 +479,38 @@ Visit `http://localhost:8000/docs` when the API is running for full interactive 
 
 ### Common Issues
 
+**Issue: "The api_key client option must be set" or GROQ_API_KEY error**
+
+This means your `.env` file is not set up correctly:
+
+1. Make sure you have a `.env` file in the project root
+2. Verify it contains: `GROQ_API_KEY=your-actual-key`
+3. Make sure `python-dotenv` is installed: `pip install python-dotenv`
+4. Restart the backend after creating/editing the `.env` file
+
 **Issue: "Module not found" errors**
 
-**Windows:**
-```powershell
-# Make sure you're in the virtual environment
-.\venv\Scripts\Activate.ps1
+Make sure you're in the virtual environment:
 
-# Reinstall dependencies
-python -m pip install -r backend\requirements.txt
-python -m pip install -r apps\web\requirements.txt
-```
-
-**Mac/Linux:**
 ```bash
-# Make sure you're in the virtual environment
+# Activate virtual environment
 source venv/bin/activate
 
 # Reinstall dependencies
 pip install -r backend/requirements.txt
 pip install -r apps/web/requirements.txt
+```
+
+**Issue: "Could not import module 'api'" or "No module named 'packages'"**
+
+Run the backend from the project root, not from the backend directory:
+
+```bash
+# CORRECT - from project root
+cd /path/to/Self-Learning-Prompt-Engineering-System
+python -m uvicorn backend.api:app --reload
+
+# INCORRECT - don't run from backend/
 ```
 
 **Issue: "Connection refused" when web app tries to connect to API**
@@ -548,24 +521,14 @@ Backend: http://localhost:8000
 Web App: http://localhost:8501
 ```
 
-**Issue: Database connection errors**
-
-Check your `DATABASE_URL` environment variable is set correctly, or the API will fail when trying to save data.
-
 **Issue: Port already in use**
 
-**Windows:**
-```powershell
-# Find process using port 8000
-netstat -ano | findstr :8000
-# Kill the process (replace PID with actual process ID)
-taskkill /PID <PID> /F
-```
+Find and kill the process using the port:
 
-**Mac/Linux:**
 ```bash
 # Find process using port 8000
 lsof -i :8000
+
 # Kill the process (replace PID with actual process ID)
 kill -9 <PID>
 ```
