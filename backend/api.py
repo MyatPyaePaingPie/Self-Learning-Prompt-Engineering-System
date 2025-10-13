@@ -10,6 +10,10 @@ from packages.db.crud import *
 from dotenv import load_dotenv
 load_dotenv()
 
+# Week 6: File storage integration for version tracking
+from storage.file_storage import FileStorage
+storage = FileStorage("storage")
+
 app = FastAPI(title="Self-Learning Prompt Engineering System", version="1.0.0")
 
 class CreatePromptIn(BaseModel):
@@ -62,6 +66,14 @@ def create_prompt(payload: CreatePromptIn):
             
             s.commit()
             
+            # Week 6: Save versions to file storage with timestamps
+            try:
+                storage.save_version_to_csv(prompt.id, v0)
+                storage.save_version_to_csv(prompt.id, v1)
+            except Exception as e:
+                # Log warning but don't fail API request - file storage is supplementary
+                print(f"⚠️  Warning: Failed to save versions to CSV: {e}")
+            
             return CreatePromptResponse(
                 promptId=str(prompt.id),
                 versionId=str(v1.id),
@@ -99,6 +111,13 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
             maybe_update_best_head(s, prompt.id, new_version.id, score.total)
             
             s.commit()
+            
+            # Week 6: Save new version to file storage with timestamp
+            try:
+                storage.save_version_to_csv(prompt.id, new_version)
+            except Exception as e:
+                # Log warning but don't fail API request - file storage is supplementary
+                print(f"⚠️  Warning: Failed to save version to CSV: {e}")
             
             return {
                 "versionId": str(new_version.id),

@@ -144,3 +144,56 @@ def test_metrics_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert "message" in data or "status" in data
+
+def test_version_saved_to_csv_with_timestamp():
+    """
+    Week 6 Test: Verify that prompt versions are saved to CSV with timestamps.
+    
+    Tests:
+    1. CSV file is created after prompt creation
+    2. Timestamp field exists and is populated
+    3. Both v0 and v1 versions are saved
+    """
+    import csv
+    from pathlib import Path
+    
+    # Create a test prompt
+    test_prompt = {"text": "Test prompt for Week 6 version tracking"}
+    response = client.post("/v1/prompts", json=test_prompt)
+    assert response.status_code == 200
+    
+    prompt_id = response.json()["promptId"]
+    
+    # Check that CSV file exists
+    csv_path = Path("storage/prompt_versions.csv")
+    assert csv_path.exists(), "CSV file should exist after creating prompt"
+    
+    # Read the CSV and find entries for this prompt
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    
+    # Find rows for our prompt
+    prompt_rows = [row for row in rows if row['prompt_id'] == prompt_id]
+    
+    # Should have at least 2 versions (v0 original, v1 improved)
+    assert len(prompt_rows) >= 2, f"Expected at least 2 versions, found {len(prompt_rows)}"
+    
+    # Check that timestamp exists and is not empty for all versions
+    for row in prompt_rows:
+        assert 'timestamp' in row, "Timestamp field should exist in CSV"
+        assert row['timestamp'], "Timestamp should not be empty"
+        assert 'T' in row['timestamp'], "Timestamp should be in ISO format"
+        
+        # Verify other required fields
+        assert 'version_no' in row
+        assert 'version_uuid' in row
+        assert 'text' in row
+        assert 'source' in row
+    
+    # Check that v0 and v1 exist
+    version_numbers = [row['version_no'] for row in prompt_rows]
+    assert '0' in version_numbers, "Version 0 (original) should be saved"
+    assert '1' in version_numbers, "Version 1 (improved) should be saved"
+    
+    print(f"✅ Week 6 Test Passed: {len(prompt_rows)} versions saved with timestamps")
