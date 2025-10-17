@@ -22,13 +22,11 @@ if st.button("Improve Prompt") and user_prompt:
             
             # Display original prompt
             st.subheader("Original Prompt:")
-            # st.text_area("", user_prompt, height=100, disabled=True, key="original")
             st.text_area("Original Prompt", user_prompt, height=100, disabled=True, key="original", label_visibility="collapsed")
 
             
             # Display improved prompt
             st.subheader("Improved Prompt:")
-            # st.text_area("", data["improved"], height=200, key="improved")
             st.text_area("Improved Prompt", data["improved"], height=200, key="improved", label_visibility="collapsed")
 
             
