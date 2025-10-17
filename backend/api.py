@@ -86,7 +86,7 @@ def create_prompt(payload: CreatePromptIn):
                 versionNo=1,
                 improved=improved.text,
                 explanation=improved.explanation,
-                judge=judge_data
+                judge=score.model_dump()
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -130,7 +130,7 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
                 "versionNo": next_version,
                 "text": improved.text,
                 "explanation": improved.explanation,
-                "judge": judge_data()
+                "judge": score.model_dump()
             }
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid prompt ID")
