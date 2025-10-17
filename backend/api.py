@@ -6,6 +6,11 @@ from packages.core.judge import judge_prompt
 from packages.core.learning import update_rules
 from packages.db.session import get_session
 from packages.db.crud import *
+import sqlalchemy as sa
+import sys, os
+
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 app = FastAPI(title="Self-Learning Prompt Engineering System", version="1.0.0")
 
@@ -31,6 +36,7 @@ class PromptDetailsResponse(BaseModel):
     original: dict
     best: dict
     history: list[dict]
+
 
 @app.get("/")
 def read_root():
@@ -59,13 +65,15 @@ def create_prompt(payload: CreatePromptIn):
             
             s.commit()
             
+            judge_data = score.model_dump() if hasattr(score, "model_dump") else score
+
             return CreatePromptResponse(
                 promptId=str(prompt.id),
                 versionId=str(v1.id),
                 versionNo=1,
                 improved=improved.text,
                 explanation=improved.explanation,
-                judge=score.model_dump()
+                judge=judge_data
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -97,12 +105,14 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
             
             s.commit()
             
+            judge_data = score.model_dump() if hasattr(score, "model_dump") else score
+
             return {
                 "versionId": str(new_version.id),
                 "versionNo": next_version,
                 "text": improved.text,
                 "explanation": improved.explanation,
-                "judge": score.model_dump()
+                "judge": judge_data()
             }
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid prompt ID")
@@ -128,7 +138,9 @@ def judge_version(version_id: str, payload: JudgePromptIn):
             
             s.commit()
             
-            return {"scorecard": score.model_dump()}
+            judge_data = score.model_dump() if hasattr(score, "model_dump") else score
+
+            return {"scorecard": judge_data}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid version ID")
     except Exception as e:
@@ -136,7 +148,9 @@ def judge_version(version_id: str, payload: JudgePromptIn):
 
 @app.post("/v1/prompts/{prompt_id}/learn")
 def learn_from_prompt(prompt_id: str):
-    """Update learning rules based on prompt history"""
+    """Aggregates all judged versions for a prompt and updates learning state.
+    Uses historical version scores to refine prompt-improvement strategies."""
+
     try:
         with get_session() as s:
             prompt = get_prompt_by_id(s, uuid.UUID(prompt_id))
@@ -247,7 +261,8 @@ def get_prompt_details(prompt_id: str):
 
 @app.get("/v1/metrics")
 def get_metrics():
-    """Get system metrics for monitoring"""
+    """Get system metrics for monitoring.
+    Currently a placeholder — will be expanded in future weeks"""
     return {
         "message": "Metrics endpoint - TODO: implement actual metrics collection",
         "status": "placeholder"
