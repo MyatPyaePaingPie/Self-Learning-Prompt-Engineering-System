@@ -1,11 +1,11 @@
 from pydantic import BaseModel
 
 RUBRIC = {
-  "clarity":   {"weight": 1.0, "checks": ["clear role", "purpose stated", "no ambiguity"]},
-  "specificity":{"weight":1.0, "checks": ["concrete outputs", "constraints", "examples/edge-cases"]},
-  "actionability":{"weight":1.0, "checks": ["step-by-step", "inputs named", "decision points"]},
-  "structure":{"weight":1.0, "checks": ["sections", "bullets", "headings/placeholders"]},
-  "context_use":{"weight":1.0, "checks": ["preserves intent", "adds necessary context only"]}
+    "clarity": {"weight": 1.0, "checks": ["clear role", "purpose stated", "no ambiguity"]},
+    "specificity": {"weight": 1.0, "checks": ["concrete outputs", "constraints", "examples/edge-cases"]},
+    "actionability": {"weight": 1.0, "checks": ["step-by-step", "inputs named", "decision points"]},
+    "structure": {"weight": 1.0, "checks": ["sections", "bullets", "headings/placeholders"]},
+    "context_use": {"weight": 1.0, "checks": ["preserves intent", "adds necessary context only"]},
 }
 
 class Scorecard(BaseModel):
@@ -15,33 +15,52 @@ class Scorecard(BaseModel):
     structure: float
     context_use: float
     feedback: dict
-    
-    @property
-    def total(self): 
-        return self.clarity + self.specificity + self.actionability + self.structure + self.context_use
+    total: float  # ✅ numeric field only
 
-def _contains_any(s, keys): 
+    def model_dump(self, *args, **kwargs):
+        data = super().model_dump(*args, **kwargs)
+        if not data.get("total"):
+            data["total"] = (
+                self.clarity
+                + self.specificity
+                + self.actionability
+                + self.structure
+                + self.context_use
+            )
+        return data
+
+def _contains_any(s, keys):
     return any(k.lower() in s.lower() for k in keys)
 
 def judge_prompt(text: str, rubric=None) -> Scorecard:
     r = RUBRIC if rubric is None else rubric
-    scores = {"clarity":0, "specificity":0, "actionability":0, "structure":0, "context_use":0}
-    fb = {"pros":[], "cons":[], "summary":""}
+    scores = {k: 0 for k in RUBRIC.keys()}
+    fb = {"pros": [], "cons": [], "summary": ""}
 
-    if _contains_any(text, ["You are a","Task:"]): 
+    if _contains_any(text, ["You are a", "Task:"]):
         scores["clarity"] += 2
         fb["pros"].append("Clear role and task.")
-    if _contains_any(text, ["Deliverables","Final"]): 
+    if _contains_any(text, ["Deliverables", "Final"]):
         scores["specificity"] += 2
-    if _contains_any(text, ["step-by-step","steps","Plan"]): 
+    if _contains_any(text, ["step-by-step", "steps", "Plan"]):
         scores["actionability"] += 2
-    if _contains_any(text, ["Constraints","If information is missing"]): 
+    if _contains_any(text, ["Constraints", "If information is missing"]):
         scores["context_use"] += 2
-    if _contains_any(text, ["- ","\n\n"]): 
+    if _contains_any(text, ["- ", "\n\n"]):
         scores["structure"] += 2
 
-    for k in scores: 
-        scores[k] = min(10, max(0, scores[k]*2.5))  # scale to 0..10
+    for k in scores:
+        scores[k] = min(10, max(0, scores[k] * 2.5))
 
     fb["summary"] = "Heuristic scoring v1. Add LLM judge for nuance."
-    return Scorecard(**scores, feedback=fb)
+
+    # ✅ compute total as a real float before returning
+    total = float(
+        scores["clarity"]
+        + scores["specificity"]
+        + scores["actionability"]
+        + scores["structure"]
+        + scores["context_use"]
+    )
+
+    return Scorecard(**scores, feedback=fb, total=total)
