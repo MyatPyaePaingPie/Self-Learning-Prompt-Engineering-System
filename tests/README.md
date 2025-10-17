@@ -3,89 +3,47 @@
 ## How to run tests
 
 ### Prerequisites
-1. Install test dependencies:
+
+1. **Install test dependencies:**
    ```bash
    pip install -r tests/requirements.txt
    ```
 
-   **Windows (if pip doesn't work):**
-   ```bash
-   python -m pip install -r tests/requirements.txt
-   ```
+2. **Set up `.env` file** with your Groq API key (required for integration tests)
 
-2. Make sure your backend is running (for integration tests):
+3. **Make sure your backend is running** (for integration tests):
    ```bash
-   cd backend
-   uvicorn api:app --reload
-   ```
-
-   **Windows (if uvicorn doesn't work):**
-   ```bash
-   python -m uvicorn api:app --reload
+   cd /path/to/Self-Learning-Prompt-Engineering-System
+   source venv/bin/activate
+   python -m uvicorn backend.api:app --reload
    ```
 
 ### Running Tests
 
 #### Run all tests:
 ```bash
-pytest tests/
-```
-
-**Windows (if pytest doesn't work):**
-```bash
-python -m pytest tests/
+pytest tests/ -v
 ```
 
 #### Run only unit tests:
 ```bash
-pytest tests/unit/
-```
-
-**Windows:**
-```bash
-python -m pytest tests/unit/
+pytest tests/unit/ -v
 ```
 
 #### Run only integration tests:
 ```bash
-pytest tests/integration/
-```
-
-**Windows:**
-```bash
-python -m pytest tests/integration/
+pytest tests/integration/ -v
 ```
 
 #### Run specific test file:
 ```bash
-pytest tests/unit/test_api.py
-pytest tests/unit/test_streamlit_app.py
-```
-
-**Windows:**
-```bash
-python -m pytest tests/unit/test_api.py
-python -m pytest tests/unit/test_streamlit_app.py
-```
-
-#### Run with verbose output:
-```bash
-pytest tests/ -v
-```
-
-**Windows:**
-```bash
-python -m pytest tests/ -v
+pytest tests/unit/test_api.py -v
+pytest tests/unit/test_streamlit_app.py -v
 ```
 
 #### Run with coverage:
 ```bash
 pytest tests/ --cov=backend --cov=apps/web
-```
-
-**Windows:**
-```bash
-python -m pytest tests/ --cov=backend --cov=apps/web
 ```
 
 ## Test Structure
