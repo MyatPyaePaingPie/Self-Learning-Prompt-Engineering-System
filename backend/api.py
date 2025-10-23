@@ -65,6 +65,7 @@ def create_prompt(payload: CreatePromptIn):
             
             # Judge the improvement
             score = judge_prompt(improved.text, rubric=None)
+            judge_data = score.model_dump() if hasattr(score, "model_dump") else score
             create_judge_score_row(s, v1.id, score)
             
             # Update best head if score is good
@@ -111,6 +112,7 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
             
             # Judge the improvement
             score = judge_prompt(improved.text, rubric=None)
+            judge_data = score.model_dump() if hasattr(score, "model_dump") else score
             create_judge_score_row(s, new_version.id, score)
             
             # Update best head if score is better
@@ -130,7 +132,7 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
                 "versionNo": next_version,
                 "text": improved.text,
                 "explanation": improved.explanation,
-                "judge": judge_data()
+                "judge": judge_data
             }
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid prompt ID")
