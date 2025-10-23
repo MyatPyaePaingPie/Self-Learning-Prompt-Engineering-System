@@ -17,3 +17,22 @@ def update_rules(history: list[dict]) -> LearningState:
     """
     # placeholder: compute deltas, toggle flags. For now, keep defaults.
     return STATE
+
+
+def should_keep_or_revert(scores: list[float], new_score: float, threshold: float = 0.5):
+    """
+    Decide whether to keep or revert based on average past scores.
+
+    Args:
+        scores: List of previous total scores.
+        new_score: The most recent version's total score.
+        threshold: How much higher the new score must be to be considered better.
+
+    Returns:
+        "keep" if new_score is >= average + threshold
+        "revert" otherwise.
+    """
+    if not scores:
+        return "keep"
+    avg_score = sum(scores) / len(scores)
+    return "keep" if new_score >= avg_score + threshold else "revert"
