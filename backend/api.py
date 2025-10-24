@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uuid
+import logging
 from packages.core.engine import improve_prompt
 from packages.core.judge import judge_prompt
 from packages.core.learning import update_rules
@@ -14,6 +15,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from dotenv import load_dotenv
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Week 6: File storage integration for version tracking
 from storage.file_storage import FileStorage

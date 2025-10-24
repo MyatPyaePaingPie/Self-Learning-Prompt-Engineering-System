@@ -46,6 +46,19 @@ pytest tests/unit/test_streamlit_app.py -v
 pytest tests/ --cov=backend --cov=apps/web
 ```
 
+#### Run Week 7 error handling tests only:
+```bash
+pytest tests/unit/test_api.py::test_error_handling_with_invalid_api_key -v
+pytest tests/unit/test_api.py::test_error_handling_fallback_sources -v
+pytest tests/unit/test_api.py::test_empty_prompt_handling -v
+pytest tests/unit/test_api.py::test_very_long_prompt_handling -v
+```
+
+Or run all Week 7 tests at once:
+```bash
+pytest tests/unit/test_api.py -k "error_handling or empty_prompt or very_long" -v
+```
+
 ## Test Structure
 
 - `tests/unit/` - Individual component tests
@@ -57,12 +70,24 @@ pytest tests/ --cov=backend --cov=apps/web
 ## What Each Test Does
 
 ### API Tests (`test_api.py`)
+
+**Basic Functionality:**
 - ✅ Home endpoint returns correct message
 - ✅ Improve endpoint processes prompts correctly
-- ✅ Handles empty prompts
+- ✅ Get prompt details with history
+- ✅ Improve existing prompts
+- ✅ Metrics endpoint responds
 - ✅ Validates input format
 - ✅ Handles invalid JSON
-- ✅ Processes long prompts
+
+**Week 6 Tests:**
+- ✅ Version tracking to CSV with timestamps
+
+**Week 7 Tests (Error Handling):**
+- ✅ Handles API errors gracefully (falls back to template/heuristic)
+- ✅ Fallback sources work correctly
+- ✅ Handles empty prompts without crashing
+- ✅ Handles very long prompts (1000+ characters)
 
 ### Streamlit Tests (`test_streamlit_app.py`)
 - ✅ App title is correct
