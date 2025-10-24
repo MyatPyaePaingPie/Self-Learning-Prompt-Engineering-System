@@ -5,6 +5,8 @@ import logging
 from packages.core.engine import improve_prompt
 from packages.core.judge import judge_prompt
 from packages.core.learning import update_rules
+from packages.core.learning import update_rules, should_keep_or_revert
+
 from packages.db.session import get_session
 from packages.db.crud import *
 import sqlalchemy as sa
@@ -73,6 +75,7 @@ def create_prompt(payload: CreatePromptIn):
             
             # Judge the improvement
             score = judge_prompt(improved.text, rubric=None)
+            judge_data = score.model_dump() if hasattr(score, "model_dump") else score
             create_judge_score_row(s, v1.id, score)
             
             # Update best head if score is good
@@ -119,6 +122,7 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
             
             # Judge the improvement
             score = judge_prompt(improved.text, rubric=None)
+            judge_data = score.model_dump() if hasattr(score, "model_dump") else score
             create_judge_score_row(s, new_version.id, score)
             
             # Update best head if score is better
@@ -207,7 +211,21 @@ def learn_from_prompt(prompt_id: str):
             # Update learning rules
             new_state = update_rules(history)
             
-            return {"message": "Learning rules updated", "state": new_state.__dict__}
+            past_scores = [h["scorecard"]["total"] for h in history[:-1]] if len(history) > 1 else []
+            latest_score = history[-1]["scorecard"]["total"] if history else 0
+            decision = should_keep_or_revert(past_scores, latest_score)
+
+            if decision == "revert":
+                print("🔁 Reverting to previous best version.")
+            else:
+                print("✅ Keeping latest version as best.")
+
+            return {
+                "message": "Learning rules updated",
+                "decision": decision,
+                "state": new_state.__dict__,
+            }
+            #return {"message": "Learning rules updated", "state": new_state.__dict__}
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid prompt ID")
     except Exception as e:
