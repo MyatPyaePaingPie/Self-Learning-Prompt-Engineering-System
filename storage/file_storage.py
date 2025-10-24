@@ -1,548 +1,347 @@
-#!/usr/bin/env python3
 """
-File Storage Script for Self-Learning Prompt Engineering System
-Author: Atang's Assignment
-
-This script provides functionality to save text content to organized folders:
-- prompts/ - for storing original and improved prompts
-- results/ - for storing processing results and outputs
+File Storage System for Self-Learning Prompt Engineering System
+Handles saving prompts, results, judge scores, and CSV learning data
 """
 
-import os
-import json
 import csv
+import json
+import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, List, Optional, Any, Union
+import uuid
 
-# Common LLM names for validation
-COMMON_LLMS = [
-    "GPT-4", "GPT-3.5", "Claude-3", "Claude-3.5", "Gemini-Pro",
-    "Llama-2", "Mistral-7B", "PaLM-2", "Other"
-]
 
 class FileStorage:
-    """Simple file storage system for prompts and results with CSV support."""
+    """Enhanced file storage with CSV learning system and sequential ID tracking"""
     
-    def __init__(self, base_dir: str = "."):
-        """Initialize file storage with base directory."""
+    def __init__(self, base_dir: str = "storage"):
+        """Initialize file storage with base directory"""
         self.base_dir = Path(base_dir)
         self.prompts_dir = self.base_dir / "prompts"
         self.results_dir = self.base_dir / "results"
         
-        # Ensure directories exist
+        # Create directories if they don't exist
+        self.base_dir.mkdir(exist_ok=True)
         self.prompts_dir.mkdir(exist_ok=True)
         self.results_dir.mkdir(exist_ok=True)
     
-    def save_prompt(self, text: str, prompt_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Save a prompt to the prompts/ folder.
-        
-        Args:
-            text: The prompt text to save
-            prompt_id: Optional custom ID, otherwise generates timestamp-based ID
-            metadata: Optional metadata dictionary
-            
-        Returns:
-            str: The filename where the prompt was saved
-        """
+    def save_prompt(self, text: str, prompt_id: Optional[str] = None, metadata: Optional[Dict] = None) -> str:
+        """Save prompt to file with optional metadata"""
         if prompt_id is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            prompt_id = f"prompt_{timestamp}"
+            prompt_id = str(uuid.uuid4())
         
         filename = f"{prompt_id}.txt"
-        filepath = self.prompts_dir / filename
+        file_path = self.prompts_dir / filename
         
-        # Prepare content with metadata header if provided
-        content = text
+        # Save main content
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        
+        # Save metadata if provided
         if metadata:
-            header = f"# Metadata: {json.dumps(metadata, indent=2)}\n# Content:\n"
-            content = header + text
+            metadata_path = self.prompts_dir / f"{prompt_id}_metadata.json"
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
         
-        try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"✅ Prompt saved to: {filepath}")
-            return filename
-        except Exception as e:
-            print(f"❌ Error saving prompt: {e}")
-            raise
+        return filename
     
-    def save_result(self, text: str, result_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """
-        Save a result to the results/ folder.
-        
-        Args:
-            text: The result text to save
-            result_id: Optional custom ID, otherwise generates timestamp-based ID
-            metadata: Optional metadata dictionary
-            
-        Returns:
-            str: The filename where the result was saved
-        """
+    def save_result(self, text: str, result_id: Optional[str] = None, metadata: Optional[Dict] = None) -> str:
+        """Save result to file with optional metadata"""
         if result_id is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            result_id = f"result_{timestamp}"
+            result_id = str(uuid.uuid4())
         
         filename = f"{result_id}.txt"
-        filepath = self.results_dir / filename
+        file_path = self.results_dir / filename
         
-        # Prepare content with metadata header if provided
-        content = text
+        # Save main content
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        
+        # Save metadata if provided
         if metadata:
-            header = f"# Metadata: {json.dumps(metadata, indent=2)}\n# Content:\n"
-            content = header + text
+            metadata_path = self.results_dir / f"{result_id}_metadata.json"
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
         
-        try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"✅ Result saved to: {filepath}")
-            return filename
-        except Exception as e:
-            print(f"❌ Error saving result: {e}")
-            raise
+        return filename
     
     def load_prompt(self, filename: str) -> str:
-        """Load a prompt from the prompts/ folder."""
-        filepath = self.prompts_dir / filename
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception as e:
-            print(f"❌ Error loading prompt {filename}: {e}")
-            raise
+        """Load prompt from file"""
+        file_path = self.prompts_dir / filename
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
     
     def load_result(self, filename: str) -> str:
-        """Load a result from the results/ folder."""
-        filepath = self.results_dir / filename
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception as e:
-            print(f"❌ Error loading result {filename}: {e}")
-            raise
+        """Load result from file"""
+        file_path = self.results_dir / filename
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
     
-    def list_prompts(self) -> list[str]:
-        """List all prompt files."""
+    def list_prompts(self) -> List[str]:
+        """List all prompt files"""
         return [f.name for f in self.prompts_dir.glob("*.txt")]
     
-    def list_results(self) -> list[str]:
-        """List all result files."""
+    def list_results(self) -> List[str]:
+        """List all result files"""
         return [f.name for f in self.results_dir.glob("*.txt")]
     
-    def _get_next_prompt_id(self, csv_filename: str, is_rewrite: bool = False, base_id: str = None) -> str:
-        """
-        Generate the next sequential prompt ID using number system.
+    def save_to_csv(self, filename: str, data: Dict[str, Any], is_rewrite: bool = False, base_prompt_id: Optional[str] = None) -> str:
+        """Save data to CSV with sequential ID system"""
+        csv_path = self.base_dir / f"{filename}.csv"
         
-        Args:
-            csv_filename: Name of the CSV file to check existing IDs
-            is_rewrite: Whether this is a rewritten prompt (adds .1)
-            base_id: Base ID for rewrite (e.g., "001" becomes "001.1")
-            
-        Returns:
-            str: Next sequential ID (e.g., "001", "002", "001.1", "002.1")
-        """
-        # Ensure .csv extension
-        if not csv_filename.endswith('.csv'):
-            csv_filename += '.csv'
-            
-        csv_path = self.base_dir / csv_filename
+        # Generate sequential ID
+        prompt_id = self._generate_sequential_id(csv_path, is_rewrite, base_prompt_id)
         
-        if is_rewrite and base_id:
-            # For rewrites, use base_id + .1
-            return f"{base_id}.1"
-        
-        # Get existing entries to find the highest number
-        existing_ids = []
-        if csv_path.exists():
-            try:
-                with open(csv_path, 'r', encoding='utf-8') as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        if 'prompt_id' in row:
-                            existing_ids.append(row['prompt_id'])
-            except Exception:
-                pass  # If file can't be read, start from 001
-        
-        # Find the highest base number (ignoring .1 versions)
-        max_num = 0
-        for id_str in existing_ids:
-            try:
-                # Extract the base number (before any decimal)
-                base_part = id_str.split('.')[0]
-                # Try to convert to int
-                num = int(base_part)
-                max_num = max(max_num, num)
-            except ValueError:
-                continue  # Skip non-numeric IDs
-        
-        # Return next sequential number
-        next_num = max_num + 1
-        return f"{next_num:03d}"  # Format as 001, 002, 003, etc.
-    
-    def save_to_csv(self, csv_filename: str, prompt_data: Dict[str, str], is_rewrite: bool = False, base_prompt_id: str = None) -> str:
-        """
-        Save prompt data to a CSV file with structured columns.
-        
-        Args:
-            csv_filename: Name of the CSV file (will add .csv if not present)
-            prompt_data: Dictionary containing prompt information
-            is_rewrite: Whether this is a rewritten version of an existing prompt
-            base_prompt_id: Base prompt ID for rewrites (e.g., "001" becomes "001.1")
-            
-        Expected keys in prompt_data:
-            - prompt_id: Unique identifier (auto-generated if not provided using number system)
-            - llm_name: Name of the LLM used
-            - prompt: Original prompt text
-            - original_response: Response from the original prompt
-            - rewritten_prompt: Improved version of the prompt
-            - rewritten_response: Response from the improved prompt
-            - learning_memory: Notes about what was learned
-            
-        Returns:
-            str: Path to the CSV file
-        """
-        # Ensure .csv extension
-        if not csv_filename.endswith('.csv'):
-            csv_filename += '.csv'
-            
-        csv_path = self.base_dir / csv_filename
-        
-        # Generate prompt_id if not provided using sequential numbering
-        if 'prompt_id' not in prompt_data or not prompt_data['prompt_id']:
-            prompt_data['prompt_id'] = self._get_next_prompt_id(csv_filename, is_rewrite, base_prompt_id)
-        
-        # Validate LLM name
-        if 'llm_name' in prompt_data and prompt_data['llm_name'] not in COMMON_LLMS:
-            print(f"⚠️  Warning: '{prompt_data['llm_name']}' is not in common LLMs list")
-        
-        # CSV headers
-        headers = [
-            'prompt_id', 'llm_name', 'prompt', 'original_response',
-            'rewritten_prompt', 'rewritten_response', 'learning_memory', 'timestamp'
-        ]
-        
-        # Add timestamp
-        prompt_data['timestamp'] = datetime.now().isoformat()
-        
-        # Check if file exists to determine if we need headers
-        file_exists = csv_path.exists()
-        
-        try:
-            with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=headers)
-                
-                # Write header if file is new
-                if not file_exists:
-                    writer.writeheader()
-                
-                # Write the data row
-                writer.writerow({key: prompt_data.get(key, '') for key in headers})
-                
-            print(f"✅ Data saved to CSV: {csv_path}")
-            return str(csv_path)
-            
-        except Exception as e:
-            print(f"❌ Error saving to CSV: {e}")
-            raise
-    
-    def read_from_csv(self, csv_filename: str) -> List[Dict[str, str]]:
-        """
-        Read all entries from a CSV file.
-        
-        Args:
-            csv_filename: Name of the CSV file
-            
-        Returns:
-            List of dictionaries containing prompt data
-        """
-        if not csv_filename.endswith('.csv'):
-            csv_filename += '.csv'
-            
-        csv_path = self.base_dir / csv_filename
-        
-        if not csv_path.exists():
-            print(f"❌ CSV file not found: {csv_path}")
-            return []
-        
-        try:
-            with open(csv_path, 'r', encoding='utf-8') as csvfile:
-                reader = csv.DictReader(csvfile)
-                data = list(reader)
-                print(f"✅ Loaded {len(data)} entries from CSV: {csv_path}")
-                return data
-                
-        except Exception as e:
-            print(f"❌ Error reading CSV: {e}")
-            raise
-    
-    def collect_prompt_data_interactive(self) -> Dict[str, str]:
-        """
-        Interactive method to collect prompt data from user input.
-        
-        Returns:
-            Dictionary with collected prompt data
-        """
-        print("\n📝 Interactive Prompt Data Collection")
-        print("=" * 50)
-        
-        data = {}
-        
-        # Prompt ID (optional)
-        prompt_id = input("Prompt ID (press Enter to auto-generate): ").strip()
-        if prompt_id:
-            data['prompt_id'] = prompt_id
-        
-        # LLM Name with suggestions
-        print(f"\nAvailable LLMs: {', '.join(COMMON_LLMS)}")
-        while True:
-            llm_name = input("LLM Name: ").strip()
-            if llm_name:
-                data['llm_name'] = llm_name
-                break
-            print("LLM Name is required!")
-        
-        # Original Prompt
-        print("\nEnter the original prompt (press Enter twice to finish):")
-        prompt_lines = []
-        while True:
-            line = input()
-            if line == "" and len(prompt_lines) > 0:
-                break
-            prompt_lines.append(line)
-        data['prompt'] = '\n'.join(prompt_lines)
-        
-        # Original Response
-        print("\nEnter the original response (press Enter twice to finish):")
-        response_lines = []
-        while True:
-            line = input()
-            if line == "" and len(response_lines) > 0:
-                break
-            response_lines.append(line)
-        data['original_response'] = '\n'.join(response_lines)
-        
-        # Rewritten Prompt (optional)
-        print("\nEnter the rewritten prompt (optional, press Enter twice to finish):")
-        rewritten_prompt_lines = []
-        while True:
-            line = input()
-            if line == "":
-                break
-            rewritten_prompt_lines.append(line)
-        data['rewritten_prompt'] = '\n'.join(rewritten_prompt_lines) if rewritten_prompt_lines else ''
-        
-        # Rewritten Response (optional)
-        if data['rewritten_prompt']:
-            print("\nEnter the rewritten response (press Enter twice to finish):")
-            rewritten_response_lines = []
-            while True:
-                line = input()
-                if line == "":
-                    break
-                rewritten_response_lines.append(line)
-            data['rewritten_response'] = '\n'.join(rewritten_response_lines) if rewritten_response_lines else ''
-        else:
-            data['rewritten_response'] = ''
-        
-        # Learning and Memory
-        learning = input("\nWhat did you learn from this interaction? ").strip()
-        data['learning_memory'] = learning
-        
-        return data
-    
-    def search_csv_entries(self, csv_filename: str, search_term: str, search_field: str = None) -> List[Dict[str, str]]:
-        """
-        Search for entries in CSV file.
-        
-        Args:
-            csv_filename: Name of the CSV file
-            search_term: Term to search for
-            search_field: Specific field to search in (optional, searches all fields if None)
-            
-        Returns:
-            List of matching entries
-        """
-        data = self.read_from_csv(csv_filename)
-        
-        if not data:
-            return []
-        
-        matches = []
-        search_term_lower = search_term.lower()
-        
-        for entry in data:
-            if search_field:
-                # Search in specific field
-                if search_field in entry and search_term_lower in entry[search_field].lower():
-                    matches.append(entry)
-            else:
-                # Search in all fields
-                found = any(search_term_lower in str(value).lower() for value in entry.values())
-                if found:
-                    matches.append(entry)
-        
-        print(f"🔍 Found {len(matches)} matches for '{search_term}'")
-        return matches
-    
-    def save_version_to_csv(self, prompt_id: str, version) -> str:
-        """
-        Save a prompt version to the version tracking CSV.
-        Week 6 Implementation: Tracks prompt versions with timestamps.
-        
-        Args:
-            prompt_id: UUID of the parent prompt
-            version: PromptVersion object from database with attributes:
-                - id (UUID)
-                - version_no (int)
-                - text (str)
-                - source (str)
-                - explanation (dict)
-                - created_at (datetime)
-        
-        Returns:
-            str: Path to the CSV file
-        """
-        # Ensure .csv extension
-        csv_filename = 'prompt_versions.csv'
-        csv_path = self.base_dir / csv_filename
-        
-        # Version tracking CSV headers (different from learning log headers)
-        headers = [
-            'prompt_id', 'version_no', 'version_uuid', 'text', 
-            'source', 'explanation', 'timestamp'
-        ]
-        
-        # Prepare version data
-        version_data = {
-            'prompt_id': str(prompt_id),
-            'version_no': str(version.version_no),
-            'version_uuid': str(version.id),
-            'text': version.text,
-            'source': version.source,
-            'explanation': json.dumps(version.explanation),
-            'timestamp': version.created_at.isoformat()
+        # Add ID and timestamp to data
+        data_with_id = {
+            'prompt_id': prompt_id,
+            'timestamp': datetime.now().isoformat(),
+            **data
         }
         
         # Check if file exists to determine if we need headers
         file_exists = csv_path.exists()
         
-        try:
-            with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=headers)
-                
-                # Write header if file is new
+        # Write to CSV
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            if data_with_id:
+                writer = csv.DictWriter(f, fieldnames=data_with_id.keys())
                 if not file_exists:
                     writer.writeheader()
-                
-                # Write the data row
-                writer.writerow(version_data)
-                
-            print(f"✅ Version saved to CSV: {csv_path}")
-            return str(csv_path)
-            
-        except Exception as e:
-            print(f"❌ Error saving version to CSV: {e}")
-            raise
-
-
-def main():
-    """Example usage of the file storage system with CSV functionality."""
-    storage = FileStorage()
+                writer.writerow(data_with_id)
+        
+        return prompt_id
     
-    print("🗃️  File Storage System Demo (with CSV Support)")
+    def save_version_to_csv(self, prompt_id: Union[str, 'UUID'], version) -> None:
+        """Save prompt version to dedicated CSV file (for Week 6 compatibility)"""
+        csv_path = self.base_dir / "prompt_versions.csv"
+        
+        # Extract version data
+        version_data = {
+            'prompt_id': str(prompt_id),
+            'version_no': getattr(version, 'version_no', 0),
+            'version_uuid': str(getattr(version, 'id', uuid.uuid4())),
+            'text': getattr(version, 'text', ''),
+            'source': getattr(version, 'source', 'unknown'),
+            'explanation': json.dumps(getattr(version, 'explanation', {})),
+            'timestamp': getattr(version, 'created_at', datetime.now()).isoformat() if hasattr(getattr(version, 'created_at', None), 'isoformat') else str(getattr(version, 'created_at', datetime.now().isoformat()))
+        }
+        
+        # Check if file exists
+        file_exists = csv_path.exists()
+        
+        # Write to CSV
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=version_data.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(version_data)
+    
+    def save_judge_scores_to_csv(self, prompt_id: Union[str, 'UUID'], version_id: Union[str, 'UUID'], judge_scores: Dict[str, Any]) -> None:
+        """Save judge scores alongside prompts in CSV format"""
+        csv_path = self.base_dir / "judge_scores.csv"
+        
+        # Prepare judge score data
+        score_data = {
+            'prompt_id': str(prompt_id),
+            'version_id': str(version_id),
+            'clarity': judge_scores.get('clarity', 0),
+            'specificity': judge_scores.get('specificity', 0),
+            'actionability': judge_scores.get('actionability', 0),
+            'structure': judge_scores.get('structure', 0),
+            'context_use': judge_scores.get('context_use', 0),
+            'total': judge_scores.get('total', 0),
+            'feedback': json.dumps(judge_scores.get('feedback', {})),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Check if file exists
+        file_exists = csv_path.exists()
+        
+        # Write to CSV
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=score_data.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(score_data)
+    
+    def read_from_csv(self, filename: str) -> List[Dict[str, Any]]:
+        """Read all entries from CSV file"""
+        csv_path = self.base_dir / f"{filename}.csv"
+        
+        if not csv_path.exists():
+            return []
+        
+        entries = []
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            entries = list(reader)
+        
+        return entries
+    
+    def search_csv_entries(self, filename: str, search_term: str, field: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Search CSV entries for specific term"""
+        entries = self.read_from_csv(filename)
+        
+        if not entries:
+            return []
+        
+        matches = []
+        for entry in entries:
+            if field:
+                # Search in specific field
+                if field in entry and search_term.lower() in str(entry[field]).lower():
+                    matches.append(entry)
+            else:
+                # Search in all fields
+                for value in entry.values():
+                    if search_term.lower() in str(value).lower():
+                        matches.append(entry)
+                        break
+        
+        return matches
+    
+    def get_version_history(self, prompt_id: str) -> List[Dict[str, Any]]:
+        """Get all versions for a specific prompt from CSV"""
+        return self.search_csv_entries('prompt_versions', prompt_id, 'prompt_id')
+    
+    def get_judge_scores_history(self, prompt_id: str) -> List[Dict[str, Any]]:
+        """Get all judge scores for a specific prompt"""
+        return self.search_csv_entries('judge_scores', prompt_id, 'prompt_id')
+    
+    def _generate_sequential_id(self, csv_path: Path, is_rewrite: bool, base_prompt_id: Optional[str]) -> str:
+        """Generate sequential ID (001, 002, 001.1, etc.)"""
+        if is_rewrite and base_prompt_id:
+            return f"{base_prompt_id}.1"
+        
+        if not csv_path.exists():
+            return "001"
+        
+        # Read existing IDs
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            existing_ids = [row.get('prompt_id', '') for row in reader]
+        
+        # Find next sequential number
+        max_num = 0
+        for existing_id in existing_ids:
+            if '.' not in existing_id and existing_id.isdigit():
+                max_num = max(max_num, int(existing_id))
+        
+        return f"{max_num + 1:03d}"
+    
+    def collect_prompt_data_interactive(self) -> Dict[str, str]:
+        """Interactive data collection for prompts"""
+        print("📝 Interactive Prompt Data Collection")
+        print("-" * 40)
+        
+        data = {}
+        data['llm_name'] = input("LLM Name (e.g., GPT-4, Claude-3): ") or "Unknown"
+        data['prompt'] = input("Enter the prompt: ") or "No prompt provided"
+        data['original_response'] = input("Enter the original response: ") or "No response provided"
+        data['learning_memory'] = input("Learning memory/notes: ") or "No notes"
+        
+        return data
+
+
+# Example usage and demo
+if __name__ == "__main__":
+    # Initialize storage
+    storage = FileStorage("storage")
+    
+    print("🗂️  File Storage System Demo")
     print("=" * 50)
     
-    # Example 1: Save a simple prompt (original functionality)
-    sample_prompt = "Help me write a Python function to calculate fibonacci numbers"
+    # Basic file storage demo
+    print("\n📁 Basic File Storage")
+    print("-" * 30)
+    
+    # Save a prompt
     prompt_file = storage.save_prompt(
-        text=sample_prompt,
-        prompt_id="example_prompt",
-        metadata={"author": "Atang", "type": "coding", "difficulty": "beginner"}
+        text="Write a Python function to calculate factorial",
+        prompt_id="factorial_prompt",
+        metadata={"author": "System", "type": "coding"}
     )
+    print(f"✅ Saved prompt: {prompt_file}")
     
-    # Example 2: Save a result (original functionality)
-    sample_result = """
-Here's a Python function to calculate Fibonacci numbers:
-
-def fibonacci(n):
-    if n <= 1:
-        return n
-    return fibonacci(n-1) + fibonacci(n-2)
-
-# Example usage:
-print(fibonacci(10))  # Output: 55
-"""
+    # Save a result
     result_file = storage.save_result(
-        text=sample_result,
-        result_id="fibonacci_solution",
-        metadata={"prompt_id": "example_prompt", "language": "python", "status": "completed"}
+        text="def factorial(n):\n    return 1 if n <= 1 else n * factorial(n-1)",
+        result_id="factorial_solution"
     )
+    print(f"✅ Saved result: {result_file}")
     
-    # Example 3: List files (original functionality)
-    print(f"\n📁 Prompts: {storage.list_prompts()}")
-    print(f"📁 Results: {storage.list_results()}")
-    
-    # NEW: Example 4: CSV functionality with sequential numbering
-    print(f"\n📊 CSV Functionality Demo (Sequential ID System)")
+    # CSV functionality demo
+    print("\n📊 CSV Functionality Demo (Sequential ID System)")
     print("-" * 50)
     
-    # Create sample CSV data (ID will be auto-generated as 001)
-    sample_csv_data1 = {
+    # Save some sample learning data
+    learning_data = [
+        {
+            'llm_name': 'GPT-4',
+            'prompt': 'Write a sorting algorithm',
+            'original_response': 'Here is bubble sort...',
+            'learning_memory': 'Basic request yielded simple solution'
+        },
+        {
+            'llm_name': 'Claude-3',
+            'prompt': 'Explain quantum computing',
+            'original_response': 'Quantum computing uses quantum mechanics...',
+            'learning_memory': 'Good explanation but needs more examples'
+        }
+    ]
+    
+    # Save entries
+    for i, data in enumerate(learning_data, 1):
+        prompt_id = storage.save_to_csv('learning_log', data)
+        print(f"Entry {i}: ID {prompt_id} - {data['llm_name']}")
+    
+    # Save a rewrite
+    rewrite_data = {
         'llm_name': 'GPT-4',
-        'prompt': 'Write a Python function to calculate fibonacci numbers',
-        'original_response': 'Here is a basic recursive implementation...',
-        'learning_memory': 'Basic prompt yielded simple recursive solution'
+        'prompt': 'Write efficient merge sort with complexity analysis',
+        'original_response': 'Here is optimized merge sort...',
+        'learning_memory': 'Specific requirements improve response quality'
+    }
+    rewrite_id = storage.save_to_csv('learning_log', rewrite_data, is_rewrite=True, base_prompt_id='001')
+    print(f"Rewrite: ID {rewrite_id} - {rewrite_data['llm_name']}")
+    
+    # Demonstrate judge scores saving
+    print("\n⚖️  Judge Scores Demo")
+    print("-" * 25)
+    
+    sample_scores = {
+        'clarity': 8.5,
+        'specificity': 7.0,
+        'actionability': 9.0,
+        'structure': 8.0,
+        'context_use': 6.5,
+        'total': 39.0,
+        'feedback': {
+            'pros': ['Clear task definition', 'Good structure'],
+            'cons': ['Could be more specific'],
+            'summary': 'Well-structured prompt with room for improvement'
+        }
     }
     
-    # Save to CSV (will get ID: 001)
-    csv_file = storage.save_to_csv('prompt_learning_log', sample_csv_data1)
+    storage.save_judge_scores_to_csv('factorial_prompt', 'version_001', sample_scores)
+    print(f"✅ Saved judge scores for factorial_prompt")
     
-    # Create a rewritten version of the first prompt (ID will be 001.1)
-    sample_csv_rewrite = {
-        'llm_name': 'GPT-4',
-        'prompt': 'Write an efficient Python function to calculate fibonacci numbers using dynamic programming, include error handling and docstring',
-        'original_response': 'Here is an optimized implementation with memoization...',
-        'learning_memory': 'Adding specific requirements about efficiency and documentation improves response quality significantly'
-    }
+    # Read and display data
+    print("\n📖 Reading Saved Data")
+    print("-" * 25)
     
-    # Save as rewrite of first prompt (will get ID: 001.1)
-    storage.save_to_csv('prompt_learning_log', sample_csv_rewrite, is_rewrite=True, base_prompt_id='001')
+    entries = storage.read_from_csv('learning_log')
+    print(f"Total learning log entries: {len(entries)}")
     
-    # Add another new entry (will get ID: 002)
-    sample_csv_data2 = {
-        'llm_name': 'Claude-3',
-        'prompt': 'Implement a sorting algorithm',
-        'original_response': 'Here is bubble sort...',
-        'rewritten_prompt': 'Implement merge sort algorithm in Python with time complexity analysis and unit tests',
-        'rewritten_response': 'Here is an efficient merge sort implementation...',
-        'learning_memory': 'Specific algorithm requests with analysis requirements yield better educational content'
-    }
-    
-    # Save new prompt (will get ID: 002)
-    storage.save_to_csv('prompt_learning_log', sample_csv_data2)
-    
-    # Read from CSV
-    print(f"\n📖 Reading CSV data with sequential IDs:")
-    csv_data = storage.read_from_csv('prompt_learning_log')
-    for i, entry in enumerate(csv_data, 1):
-        print(f"Entry {i}: ID {entry['prompt_id']} - {entry['llm_name']}")
+    judge_entries = storage.read_from_csv('judge_scores')
+    print(f"Total judge score entries: {len(judge_entries)}")
     
     # Search functionality
-    print(f"\n🔍 Searching for 'fibonacci' in CSV:")
-    matches = storage.search_csv_entries('prompt_learning_log', 'fibonacci')
-    for match in matches:
-        print(f"Found: ID {match['prompt_id']} - {match['learning_memory'][:50]}...")
+    print("\n🔍 Search Demo")
+    print("-" * 15)
+    matches = storage.search_csv_entries('learning_log', 'sorting')
+    print(f"Found {len(matches)} entries containing 'sorting'")
     
-    # Interactive mode prompt
-    print(f"\n💡 Sequential ID System:")
-    print("• New prompts get sequential IDs: 001, 002, 003...")
-    print("• Rewrites get decimal versions: 001.1, 002.1...")
-    print("• To try interactive data collection:")
-    print("  data = storage.collect_prompt_data_interactive()")
-    print("  storage.save_to_csv('my_prompts', data)  # Gets next sequential ID")
-    print("  storage.save_to_csv('my_prompts', rewrite_data, is_rewrite=True, base_prompt_id='001')  # Gets 001.1")
-
-
-if __name__ == "__main__":
-    main()
+    print("\n✅ Demo completed successfully!")
