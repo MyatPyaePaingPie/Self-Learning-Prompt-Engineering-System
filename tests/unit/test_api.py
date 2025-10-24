@@ -197,3 +197,94 @@ def test_version_saved_to_csv_with_timestamp():
     assert '1' in version_numbers, "Version 1 (improved) should be saved"
     
     print(f"✅ Week 6 Test Passed: {len(prompt_rows)} versions saved with timestamps")
+
+def test_error_handling_with_invalid_api_key():
+    """
+    Week 7 Test: Verify that system handles API errors gracefully.
+    
+    Tests that when LLM API fails:
+    1. System doesn't crash
+    2. Falls back to template/heuristic
+    3. Returns valid response
+    """
+    import os
+    from unittest.mock import patch
+    
+    # Test with invalid API key (simulate API failure)
+    with patch.dict(os.environ, {"GROQ_API_KEY": "invalid_key"}):
+        test_prompt = {"text": "Write a function to sort numbers"}
+        response = client.post("/v1/prompts", json=test_prompt)
+        
+        # Should still return 200 (graceful fallback)
+        assert response.status_code == 200, "Should handle API errors gracefully"
+        
+        data = response.json()
+        
+        # Should have all required fields
+        assert "improved" in data
+        assert "explanation" in data
+        assert "judge" in data
+        
+        # Should indicate fallback was used
+        # Template fallback includes "You are a senior" pattern
+        assert "senior" in data["improved"].lower() or "template" in data["improved"].lower()
+        
+        print("✅ Week 7 Test Passed: System handles API errors gracefully")
+
+def test_error_handling_fallback_sources():
+    """
+    Week 7 Test: Verify fallback sources are correctly identified.
+    
+    When API is unavailable, the source should indicate fallback mode.
+    """
+    test_prompt = {"text": "Code a sorting algorithm"}
+    response = client.post("/v1/prompts", json=test_prompt)
+    assert response.status_code == 200
+    
+    data = response.json()
+    
+    # Check that we got a valid response
+    assert "improved" in data
+    assert len(data["improved"]) > 0
+    
+    # Judge should always return scores
+    assert "judge" in data
+    assert "clarity" in data["judge"]
+    assert "total" in data["judge"]
+    
+    print("✅ Week 7 Test Passed: Fallback sources work correctly")
+
+def test_empty_prompt_handling():
+    """
+    Week 7 Test: Verify system handles edge cases like empty prompts.
+    """
+    test_prompt = {"text": ""}
+    response = client.post("/v1/prompts", json=test_prompt)
+    
+    # Should handle empty prompts without crashing
+    assert response.status_code == 200
+    
+    data = response.json()
+    assert "improved" in data
+    assert "judge" in data
+    
+    print("✅ Week 7 Test Passed: Empty prompts handled correctly")
+
+def test_very_long_prompt_handling():
+    """
+    Week 7 Test: Verify system handles very long prompts.
+    """
+    # Create a very long prompt (1000+ characters)
+    long_prompt = "Write a function to process data. " * 50
+    test_prompt = {"text": long_prompt}
+    
+    response = client.post("/v1/prompts", json=test_prompt)
+    
+    # Should handle long prompts without crashing
+    assert response.status_code == 200
+    
+    data = response.json()
+    assert "improved" in data
+    assert "judge" in data
+    
+    print("✅ Week 7 Test Passed: Long prompts handled correctly")

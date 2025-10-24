@@ -1,7 +1,11 @@
 import os
 import json
+import time
+import logging
 from pydantic import BaseModel
 from groq import Groq
+
+logger = logging.getLogger(__name__)
 
 RUBRIC = {
     "clarity": {"weight": 1.0, "checks": ["clear role", "purpose stated", "no ambiguity"]},
@@ -67,22 +71,22 @@ def _heuristic_judge(text: str) -> Scorecard:
 
     return Scorecard(**scores, feedback=fb, total=total)
 
-def judge_prompt(text: str, rubric=None) -> Scorecard:
+def judge_prompt(text: str, rubric=None, max_retries: int = 3) -> Scorecard:
     """
-    Judge a prompt using LLM-based evaluation.
+    Judge a prompt using LLM-based evaluation with retry logic and error handling.
     Falls back to heuristic scoring if API is unavailable.
     
     Args:
         text: The prompt text to judge
         rubric: Optional custom rubric (currently unused)
+        max_retries: Maximum number of retry attempts (default: 3)
     
     Returns:
         Scorecard with scores (0-10) for each criterion
     """
-    try:
-        client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        
-        system_prompt = """You are an expert prompt evaluator. Score prompts on 5 criteria (0-10 scale):
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    
+    system_prompt = """You are an expert prompt evaluator. Score prompts on 5 criteria (0-10 scale):
 
 1. **Clarity** (0-10): Is the role/purpose clear? Any ambiguity?
 2. **Specificity** (0-10): Are outputs, constraints, and examples concrete?
@@ -102,46 +106,81 @@ Return ONLY a JSON object with this exact structure:
   "summary": "<one sentence overall assessment>"
 }"""
 
-        response = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Evaluate this prompt:\n\n{text}"}
-            ],
-            model="llama-3.3-70b-versatile",
-            temperature=0.3,  # Lower temp for more consistent scoring
-            max_tokens=512,
-        )
-        
-        result_text = response.choices[0].message.content.strip()
-        
-        # Parse JSON response
-        # Handle markdown code blocks if LLM wraps response
-        if "```json" in result_text:
-            result_text = result_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in result_text:
-            result_text = result_text.split("```")[1].split("```")[0].strip()
+    # Retry loop with exponential backoff
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Evaluate this prompt:\n\n{text}"}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=512,
+            )
             
-        result = json.loads(result_text)
-        
-        # Extract scores and feedback
-        scores = {
-            "clarity": float(result["clarity"]),
-            "specificity": float(result["specificity"]),
-            "actionability": float(result["actionability"]),
-            "structure": float(result["structure"]),
-            "context_use": float(result["context_use"]),
-        }
-        
-        feedback = {
-            "pros": result.get("pros", []),
-            "cons": result.get("cons", []),
-            "summary": result.get("summary", "LLM-based evaluation")
-        }
-        
-        total = sum(scores.values())
-        
-        return Scorecard(**scores, feedback=feedback, total=total)
-        
-    except Exception as e:
-        print(f"⚠️ LLM judge error: {e}. Falling back to heuristic scoring.")
-        return _heuristic_judge(text)
+            result_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response - handle markdown code blocks
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0].strip()
+                
+            result = json.loads(result_text)
+            
+            # Extract scores and feedback
+            scores = {
+                "clarity": float(result["clarity"]),
+                "specificity": float(result["specificity"]),
+                "actionability": float(result["actionability"]),
+                "structure": float(result["structure"]),
+                "context_use": float(result["context_use"]),
+            }
+            
+            feedback = {
+                "pros": result.get("pros", []),
+                "cons": result.get("cons", []),
+                "summary": result.get("summary", "LLM-based evaluation")
+            }
+            
+            total = sum(scores.values())
+            
+            return Scorecard(**scores, feedback=feedback, total=total)
+            
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            
+            # Determine wait time based on error type
+            if "rate_limit" in error_msg.lower() or "429" in error_msg:
+                wait_time = 30 if attempt < max_retries - 1 else 0
+                logger.warning(
+                    f"Judge: Rate limit hit (attempt {attempt + 1}/{max_retries})",
+                    extra={"error": error_msg}
+                )
+            elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
+                wait_time = 2 ** attempt if attempt < max_retries - 1 else 0
+                logger.warning(
+                    f"Judge: Connection error (attempt {attempt + 1}/{max_retries}): {error_msg}",
+                    extra={"error_type": error_type}
+                )
+            else:
+                wait_time = 2 ** attempt if attempt < max_retries - 1 else 0
+                logger.warning(
+                    f"Judge: API error (attempt {attempt + 1}/{max_retries}): {error_type}: {error_msg}",
+                    extra={"text_length": len(text), "attempt": attempt}
+                )
+            
+            # If this was the last attempt, fall back to heuristic
+            if attempt == max_retries - 1:
+                logger.error(
+                    f"Judge: All {max_retries} attempts failed. Falling back to heuristic scoring.",
+                    exc_info=True
+                )
+                return _heuristic_judge(text)
+            
+            # Wait before retry
+            if wait_time > 0:
+                logger.info(f"Judge: Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
