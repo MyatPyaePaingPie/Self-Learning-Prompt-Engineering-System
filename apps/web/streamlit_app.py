@@ -43,12 +43,18 @@ if st.button("✨ Improve Prompt") and user_prompt:
 
                 # improved layout: show original + improved side by side
                 col1, col2 = st.columns(2)
+
+                # Dynamically adjust height based on content length
+                def auto_height(text, min_height=120, max_height=500):
+                    lines = text.count('\n') + len(text) // 60  # rough estimate
+                    return min(max(min_height, lines * 20), max_height)
+
                 with col1:
                     st.markdown("### 📝 Original Prompt")
                     st.text_area(
                         "Original Prompt (read-only)",
                         user_prompt,
-                        height=120,
+                        height=auto_height(user_prompt),
                         disabled=True,
                         label_visibility="collapsed"
                     )
@@ -58,10 +64,11 @@ if st.button("✨ Improve Prompt") and user_prompt:
                     st.text_area(
                         "Improved Prompt (read-only)",
                         data["improved"],
-                        height=120,
+                        height=auto_height(data["improved"]),
                         disabled=True,
                         label_visibility="collapsed"
                     )
+
 
 
                 # explanation section
@@ -69,22 +76,25 @@ if st.button("✨ Improve Prompt") and user_prompt:
                 for bullet in data["explanation"]["bullets"]:
                     st.write(f"• {bullet}")
 
-                # updated quality scores (use columns for all six metrics)
                 st.markdown("### 🧮 Quality Scores")
+
                 judge_data = data["judge"]
                 cols = st.columns(6)
-                metrics = [
-                    ("Clarity", judge_data["clarity"]),
-                    ("Specificity", judge_data["specificity"]),
-                    ("Actionability", judge_data["actionability"]),
-                    ("Structure", judge_data["structure"]),
-                    ("Context Use", judge_data["context_use"]),
-                    ("Total", judge_data["total"]),
-                ]
-                for (label, value), col in zip(metrics, cols):
-                    col.metric(label, f"{value:.1f}")
 
-                # ✅ feedback section
+                metrics = [
+                    ("Clarity", judge_data["clarity"], "How clear and easy to understand the prompt is."),
+                    ("Specificity", judge_data["specificity"], "How precise and detailed the instructions are."),
+                    ("Actionability", judge_data["actionability"], "How well the prompt guides the model to produce a concrete, usable output."),
+                    ("Structure", judge_data["structure"], "How well-organized and formatted the prompt is."),
+                    ("Context Use", judge_data["context_use"], "How effectively the prompt uses provided context or memory."),
+                    ("Total", judge_data["total"], "Sum of all scores (maximum: 50)."),
+                ]
+
+                for (label, value, info), col in zip(metrics, cols):
+                    col.metric(label, f"{value:.1f}", help=info)
+
+
+                # feedback section
                 st.markdown("### 🗣️ Feedback")
                 feedback = judge_data["feedback"]
 
