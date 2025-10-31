@@ -55,6 +55,47 @@ def fallback_to_template(original: str) -> ImprovedOut:
         source="template/fallback"
     )
 
+def generate_llm_output(prompt: str, max_retries: int = 3) -> str:
+    """
+    Generate LLM output for a given prompt using Groq's API.
+    
+    Args:
+        prompt: The prompt to send to the LLM
+        max_retries: Maximum number of retry attempts (default: 3)
+    
+    Returns:
+        String response from the LLM
+    """
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    
+    for attempt in range(max_retries):
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.7,
+                max_tokens=2048,
+            )
+            
+            return chat_completion.choices[0].message.content.strip()
+            
+        except Exception as e:
+            error_msg = str(e)
+            wait_time = 2 ** attempt if attempt < max_retries - 1 else 0
+            
+            if attempt == max_retries - 1:
+                logger.error(f"All {max_retries} attempts failed for LLM output generation.", exc_info=True)
+                return "[Error: Unable to generate response. Please try again.]"
+            
+            if wait_time > 0:
+                logger.info(f"Retrying LLM output generation in {wait_time} seconds...")
+                time.sleep(wait_time)
+
 def improve_prompt(original: str, strategy: str = "v1", max_retries: int = 3) -> ImprovedOut:
     """
     Improve a prompt using Groq's LLM API with retry logic and error handling.

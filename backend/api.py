@@ -2,9 +2,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uuid
 import logging
-from packages.core.engine import improve_prompt
+from packages.core.engine import improve_prompt, generate_llm_output
 from packages.core.judge import judge_prompt
-from packages.core.learning import update_rules
 from packages.core.learning import update_rules, should_keep_or_revert
 
 from packages.db.session import get_session
@@ -45,7 +44,10 @@ class CreatePromptResponse(BaseModel):
     promptId: str
     versionId: str
     versionNo: int
+    original: str
     improved: str
+    original_output: str
+    improved_output: str
     explanation: dict
     judge: dict
 
@@ -73,6 +75,13 @@ def create_prompt(payload: CreatePromptIn):
             improved = improve_prompt(payload.text, strategy="v1")
             v1 = create_version_row(s, prompt.id, 1, improved.text, improved.explanation, source=improved.source)
             
+            # Generate LLM outputs for both prompts
+            logger.info("Generating LLM output for original prompt...")
+            original_output = generate_llm_output(payload.text)
+            
+            logger.info("Generating LLM output for improved prompt...")
+            improved_output = generate_llm_output(improved.text)
+            
             # Judge the improvement
             score = judge_prompt(improved.text, rubric=None)
             judge_data = score.model_dump() if hasattr(score, "model_dump") else score
@@ -95,7 +104,10 @@ def create_prompt(payload: CreatePromptIn):
                 promptId=str(prompt.id),
                 versionId=str(v1.id),
                 versionNo=1,
+                original=payload.text,
                 improved=improved.text,
+                original_output=original_output,
+                improved_output=improved_output,
                 explanation=improved.explanation,
                 judge=score.model_dump()
             )
