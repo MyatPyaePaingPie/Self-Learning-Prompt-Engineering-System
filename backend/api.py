@@ -5,6 +5,7 @@ import logging
 from packages.core.engine import improve_prompt, generate_llm_output
 from packages.core.judge import judge_prompt
 from packages.core.learning import update_rules, should_keep_or_revert
+from packages.core.token_tracker import TokenTracker
 
 from packages.db.session import get_session
 from packages.db.crud import *
@@ -50,6 +51,7 @@ class CreatePromptResponse(BaseModel):
     improved_output: str
     explanation: dict
     judge: dict
+    token_metrics: dict
 
 class PromptDetailsResponse(BaseModel):
     original: dict
@@ -71,24 +73,39 @@ def create_prompt(payload: CreatePromptIn):
             v0 = create_version_row(s, prompt.id, 0, payload.text, 
                                   explanation={"bullets":["Original"]}, source="original")
             
-            # Generate improvement (v1)
-            improved = improve_prompt(payload.text, strategy="v1")
+            # Generate improvement (v1) WITH token tracking
+            improved, improvement_usage = improve_prompt(payload.text, strategy="v1")
             v1 = create_version_row(s, prompt.id, 1, improved.text, improved.explanation, source=improved.source)
             
-            # Generate LLM outputs for both prompts
+            # Generate LLM outputs for both prompts WITH token tracking
             logger.info("Generating LLM output for original prompt...")
-            original_output = generate_llm_output(payload.text)
+            original_output, orig_usage = generate_llm_output(payload.text)
             
             logger.info("Generating LLM output for improved prompt...")
-            improved_output = generate_llm_output(improved.text)
+            improved_output, imp_usage = generate_llm_output(improved.text)
             
-            # Judge the improvement
-            score = judge_prompt(improved.text, rubric=None)
+            # Judge the improvement WITH token tracking
+            score, judge_usage = judge_prompt(improved.text, rubric=None)
             judge_data = score.model_dump() if hasattr(score, "model_dump") else score
             create_judge_score_row(s, v1.id, score)
             
             # Update best head if score is good
             maybe_update_best_head(s, prompt.id, v1.id, score.total)
+            
+            # Calculate comparison metrics
+            tracker = TokenTracker()
+            token_metrics = tracker.compare_executions(
+                original_prompt=payload.text,
+                original_output=original_output,
+                improved_prompt=improved.text,
+                improved_output=improved_output,
+                improvement_tokens=improvement_usage.total_tokens,
+                improvement_cost=improvement_usage.cost_usd,
+                judging_tokens=judge_usage.total_tokens,
+                judging_cost=judge_usage.cost_usd,
+                quality_improvement=score.total,
+                model="llama-3.3-70b-versatile"
+            )
             
             s.commit()
             
@@ -109,7 +126,8 @@ def create_prompt(payload: CreatePromptIn):
                 original_output=original_output,
                 improved_output=improved_output,
                 explanation=improved.explanation,
-                judge=score.model_dump()
+                judge=score.model_dump(),
+                token_metrics=token_metrics.model_dump()
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -127,13 +145,13 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
             versions = get_prompt_versions(s, prompt.id)
             next_version = len(versions)
             
-            # Generate improvement
-            improved = improve_prompt(prompt.original_text, strategy=payload.strategy)
+            # Generate improvement WITH token tracking
+            improved, improvement_usage = improve_prompt(prompt.original_text, strategy=payload.strategy)
             new_version = create_version_row(s, prompt.id, next_version, 
                                            improved.text, improved.explanation, source=improved.source)
             
-            # Judge the improvement
-            score = judge_prompt(improved.text, rubric=None)
+            # Judge the improvement WITH token tracking
+            score, judge_usage = judge_prompt(improved.text, rubric=None)
             judge_data = score.model_dump() if hasattr(score, "model_dump") else score
             create_judge_score_row(s, new_version.id, score)
             
@@ -174,8 +192,8 @@ def judge_version(version_id: str, payload: JudgePromptIn):
             if not version:
                 raise HTTPException(status_code=404, detail="Version not found")
             
-            # Judge the version
-            score = judge_prompt(version.text, rubric=payload.rubric)
+            # Judge the version WITH token tracking
+            score, judge_usage = judge_prompt(version.text, rubric=payload.rubric)
             create_judge_score_row(s, version.id, score)
             
             s.commit()

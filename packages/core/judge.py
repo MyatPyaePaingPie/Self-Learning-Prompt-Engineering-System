@@ -4,8 +4,11 @@ import time
 import logging
 from pydantic import BaseModel
 from groq import Groq
+from datetime import datetime
+from packages.core.token_tracker import TokenTracker, TokenUsage
 
 logger = logging.getLogger(__name__)
+tracker = TokenTracker()
 
 RUBRIC = {
     "clarity": {"weight": 1.0, "checks": ["clear role", "purpose stated", "no ambiguity"]},
@@ -71,9 +74,9 @@ def _heuristic_judge(text: str) -> Scorecard:
 
     return Scorecard(**scores, feedback=fb, total=total)
 
-def judge_prompt(text: str, rubric=None, max_retries: int = 3) -> Scorecard:
+def judge_prompt(text: str, rubric=None, max_retries: int = 3) -> tuple[Scorecard, TokenUsage]:
     """
-    Judge a prompt using LLM-based evaluation with retry logic and error handling.
+    Judge a prompt using LLM-based evaluation with retry logic and error handling, and track token usage.
     Falls back to heuristic scoring if API is unavailable.
     
     Args:
@@ -82,7 +85,7 @@ def judge_prompt(text: str, rubric=None, max_retries: int = 3) -> Scorecard:
         max_retries: Maximum number of retry attempts (default: 3)
     
     Returns:
-        Scorecard with scores (0-10) for each criterion
+        Tuple of (Scorecard, token_usage)
     """
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     
@@ -146,7 +149,14 @@ Return ONLY a JSON object with this exact structure:
             
             total = sum(scores.values())
             
-            return Scorecard(**scores, feedback=feedback, total=total)
+            # Track usage
+            usage = tracker.track_llm_call(
+                system_prompt + "\n\nEvaluate this prompt:\n\n" + text,
+                result_text,
+                "llama-3.3-70b-versatile"
+            )
+            
+            return Scorecard(**scores, feedback=feedback, total=total), usage
             
         except Exception as e:
             error_type = type(e).__name__
@@ -178,7 +188,15 @@ Return ONLY a JSON object with this exact structure:
                     f"Judge: All {max_retries} attempts failed. Falling back to heuristic scoring.",
                     exc_info=True
                 )
-                return _heuristic_judge(text)
+                # Fallback to heuristic - return zero tokens
+                return _heuristic_judge(text), TokenUsage(
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    model="heuristic",
+                    timestamp=datetime.now(),
+                    cost_usd=0.0
+                )
             
             # Wait before retry
             if wait_time > 0:

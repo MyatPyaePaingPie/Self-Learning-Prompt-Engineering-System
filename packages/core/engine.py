@@ -3,8 +3,11 @@ import time
 import logging
 from pydantic import BaseModel
 from groq import Groq
+from datetime import datetime
+from packages.core.token_tracker import TokenTracker, TokenUsage
 
 logger = logging.getLogger(__name__)
+tracker = TokenTracker()
 
 TEMPLATE_V1 = """You are a senior {domain} expert.
 Task: {task}
@@ -55,16 +58,16 @@ def fallback_to_template(original: str) -> ImprovedOut:
         source="template/fallback"
     )
 
-def generate_llm_output(prompt: str, max_retries: int = 3) -> str:
+def generate_llm_output(prompt: str, max_retries: int = 3) -> tuple[str, TokenUsage]:
     """
-    Generate LLM output for a given prompt using Groq's API.
+    Generate LLM output for a given prompt using Groq's API and track token usage.
     
     Args:
         prompt: The prompt to send to the LLM
         max_retries: Maximum number of retry attempts (default: 3)
     
     Returns:
-        String response from the LLM
+        Tuple of (output_text, token_usage)
     """
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     
@@ -82,7 +85,12 @@ def generate_llm_output(prompt: str, max_retries: int = 3) -> str:
                 max_tokens=2048,
             )
             
-            return chat_completion.choices[0].message.content.strip()
+            output = chat_completion.choices[0].message.content.strip()
+            
+            # Track usage
+            usage = tracker.track_llm_call(prompt, output, "llama-3.3-70b-versatile")
+            
+            return output, usage
             
         except Exception as e:
             error_msg = str(e)
@@ -90,15 +98,23 @@ def generate_llm_output(prompt: str, max_retries: int = 3) -> str:
             
             if attempt == max_retries - 1:
                 logger.error(f"All {max_retries} attempts failed for LLM output generation.", exc_info=True)
-                return "[Error: Unable to generate response. Please try again.]"
+                # Return error with zero tokens
+                return "[Error: Unable to generate response. Please try again.]", TokenUsage(
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    model="llama-3.3-70b-versatile",
+                    timestamp=datetime.now(),
+                    cost_usd=0.0
+                )
             
             if wait_time > 0:
                 logger.info(f"Retrying LLM output generation in {wait_time} seconds...")
                 time.sleep(wait_time)
 
-def improve_prompt(original: str, strategy: str = "v1", max_retries: int = 3) -> ImprovedOut:
+def improve_prompt(original: str, strategy: str = "v1", max_retries: int = 3) -> tuple[ImprovedOut, TokenUsage]:
     """
-    Improve a prompt using Groq's LLM API with retry logic and error handling.
+    Improve a prompt using Groq's LLM API with retry logic and error handling, and track token usage.
     
     Args:
         original: The original prompt to improve
@@ -106,7 +122,7 @@ def improve_prompt(original: str, strategy: str = "v1", max_retries: int = 3) ->
         max_retries: Maximum number of retry attempts (default: 3)
     
     Returns:
-        ImprovedOut with improved text, explanation, and source
+        Tuple of (ImprovedOut, token_usage)
     """
     client = Groq(api_key=os.getenv("GROQ_API_KEY"))
     
@@ -147,11 +163,18 @@ Return ONLY the improved prompt, nothing else."""
             improved = chat_completion.choices[0].message.content.strip()
             explanation = synth_explanation(original, improved)
             
+            # Track usage
+            usage = tracker.track_llm_call(
+                system_prompt + "\n\nImprove this prompt:\n\n" + original,
+                improved,
+                "llama-3.3-70b-versatile"
+            )
+            
             return ImprovedOut(
                 text=improved,
                 explanation=explanation,
                 source="groq/llama-3.3-70b"
-            )
+            ), usage
             
         except Exception as e:
             error_type = type(e).__name__
@@ -186,7 +209,15 @@ Return ONLY the improved prompt, nothing else."""
                     f"All {max_retries} attempts failed. Falling back to template.",
                     exc_info=True
                 )
-                return fallback_to_template(original)
+                # Return fallback with zero tokens
+                return fallback_to_template(original), TokenUsage(
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    model="template/fallback",
+                    timestamp=datetime.now(),
+                    cost_usd=0.0
+                )
             
             # Wait before retry
             if wait_time > 0:
