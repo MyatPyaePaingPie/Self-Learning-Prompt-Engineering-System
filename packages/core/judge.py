@@ -1,3 +1,12 @@
+# judge.py
+"""
+judge.py
+Evaluates prompt quality across 5 criteria:
+clarity, specificity, actionability, structure, and context use.
+Returns numeric scores and total.
+"""
+
+
 import os
 import json
 import time

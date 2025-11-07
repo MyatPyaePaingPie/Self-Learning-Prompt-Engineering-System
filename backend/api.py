@@ -1,3 +1,17 @@
+"""
+api.py
+------
+FastAPI backend for the Self-Learning Prompt Engineering System.
+
+Provides endpoints for:
+  • /improve – Improve a given user prompt
+  • /learn   – Update learning log / self-improvement
+  • /health  – Quick status check for demo
+
+All endpoints return JSON responses and integrate with
+engine.py, judge.py, crud.py, and learning.py modules.
+"""
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uuid

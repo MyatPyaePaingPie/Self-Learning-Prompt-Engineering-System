@@ -1,3 +1,11 @@
+# learning.py
+"""
+learning.py
+Handles self-learning loop.
+Updates model behavior based on past prompt-improvement logs (CSV/DB).
+"""
+
+
 from dataclasses import dataclass
 
 @dataclass

@@ -1,3 +1,10 @@
+# engine.py
+"""
+engine.py
+Core logic for improving prompts using the Groq API.
+Handles calling the LLM and returning refined text.
+"""
+
 import os
 import time
 import logging

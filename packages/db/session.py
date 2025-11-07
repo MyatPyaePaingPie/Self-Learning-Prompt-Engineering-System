@@ -1,3 +1,10 @@
+# session.py
+"""
+session.py
+Sets up database connection and session for SQLAlchemy.
+"""
+
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager

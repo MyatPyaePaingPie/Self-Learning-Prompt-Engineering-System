@@ -1,3 +1,11 @@
+# models.py
+"""
+models.py
+SQLAlchemy ORM models for prompts, results, and token analytics.
+"""
+
+
+
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import ForeignKey, JSON
 import uuid, datetime as dt

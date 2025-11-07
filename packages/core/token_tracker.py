@@ -1,3 +1,10 @@
+
+# token_tracker.py
+"""
+token_tracker.py
+Tracks LLM token usage and cost for analytics.
+"""
+
 import tiktoken
 from typing import Dict
 from pydantic import BaseModel

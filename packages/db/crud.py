@@ -1,3 +1,10 @@
+# crud.py
+"""
+crud.py
+Database helper functions for creating and retrieving prompt logs.
+"""
+
+
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from .models import Prompt, PromptVersion, JudgeScore, BestHead
