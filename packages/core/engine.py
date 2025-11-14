@@ -5,6 +5,11 @@ from pydantic import BaseModel
 from groq import Groq
 from datetime import datetime
 from packages.core.token_tracker import TokenTracker, TokenUsage
+from packages.db.session import get_db
+from packages.db.crud import create_history_record
+from packages.core.judge import score_prompt
+from packages.core.token_tracker import TokenTracker
+
 
 logger = logging.getLogger(__name__)
 tracker = TokenTracker()
@@ -223,3 +228,35 @@ Return ONLY the improved prompt, nothing else."""
             if wait_time > 0:
                 logger.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
+
+
+def improve_prompt_and_store(prompt: str):
+    improved = improve_prompt(prompt)
+
+    # 🔵 ADDED — compute scores
+    scores = score_prompt(improved)
+
+    # 🔵 ADDED — compute token usage
+    tracker = TokenTracker()
+    token_usage = tracker.get_usage()
+
+    # 🔵 ADDED — history payload
+    record_data = {
+        "original_prompt": prompt,
+        "improved_prompt": improved,
+        "clarity": scores.clarity,
+        "specificity": scores.specificity,
+        "actionability": scores.actionability,
+        "structure": scores.structure,
+        "context_use": scores.context_use,
+        "total_score": scores.total,
+        "input_tokens": token_usage.input_tokens,
+        "output_tokens": token_usage.output_tokens,
+        "model_version": "gpt-4.1-mini"
+    }
+
+    # 🔵 ADDED — save to DB
+    db = next(get_db())
+    create_history_record(db, record_data)
+
+    return improved

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 import uuid
 import logging
@@ -7,10 +7,16 @@ from packages.core.judge import judge_prompt
 from packages.core.learning import update_rules, should_keep_or_revert
 from packages.core.token_tracker import TokenTracker
 
+from fastapi.responses import HTMLResponse, FileResponse
+from packages.db.session import get_db
+from packages.db.crud import get_all_history, export_history_to_csv
+from packages.core.analytics import compute_analytics
+
 from packages.db.session import get_session
 from packages.db.crud import *
 import sqlalchemy as sa
 import sys, os
+
 
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -345,3 +351,27 @@ def get_metrics():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+# 🔵 ADDED — JSON history endpoint
+@app.get("/history")
+def get_history(sort_by: str = "created_at", order: str = "desc", db: Session = Depends(get_db)):
+    return get_all_history(db, sort_by, order)
+
+# 🔵 ADDED — HTML history viewer
+@app.get("/history/html", response_class=HTMLResponse)
+def history_html(db: Session = Depends(get_db)):
+    ...
+
+# 🔵 ADDED — CSV export
+@app.get("/history/export")
+def export_history(db: Session = Depends(get_db)):
+    file_path = export_history_to_csv(db)
+    return FileResponse(file_path, filename="prompt_history.csv")
+
+# 🔵 ADDED — analytics endpoint
+@app.get("/history/analytics")
+def history_analytics(db: Session = Depends(get_db)):
+    history = get_all_history(db)
+    return compute_analytics(history)

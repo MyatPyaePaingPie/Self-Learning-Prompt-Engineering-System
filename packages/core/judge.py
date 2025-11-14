@@ -202,3 +202,8 @@ Return ONLY a JSON object with this exact structure:
             if wait_time > 0:
                 logger.info(f"Judge: Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
+
+
+def score_prompt(text: str):
+    """Compatibility wrapper so older code doesn't break."""
+    return judge_prompt(text)

@@ -17,3 +17,11 @@ def get_session():
         yield session
     finally:
         session.close()
+
+# Dependency: provide a database session for FastAPI routes
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

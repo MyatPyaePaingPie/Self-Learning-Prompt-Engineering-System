@@ -2,7 +2,11 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from .models import Prompt, PromptVersion, JudgeScore, BestHead
 from packages.core.judge import Scorecard
+from packages.db import models
+from datetime import datetime
+import csv
 import uuid
+
 
 def create_prompt_row(session: Session, user_id: str | None, original_text: str) -> Prompt:
     """Create a new prompt record"""
@@ -66,3 +70,45 @@ def get_prompt_versions(session: Session, prompt_id: uuid.UUID) -> list[PromptVe
 def get_best_head(session: Session, prompt_id: uuid.UUID) -> BestHead | None:
     """Get the best version for a prompt"""
     return session.execute(sa.select(BestHead).where(BestHead.prompt_id==prompt_id)).scalar_one_or_none()
+
+
+def create_history_record(db: Session, record_data: dict):
+    history = models.PromptHistory(**record_data)
+    db.add(history)
+    db.commit()
+    db.refresh(history)
+    return history
+
+
+def get_all_history(db: Session, sort_by="created_at", order="desc"):
+    model = models.PromptHistory
+    field = getattr(model, sort_by)
+    if order == "asc":
+        return db.query(model).order_by(field.asc()).all()
+    else:
+        return db.query(model).order_by(field.desc()).all()
+
+
+def export_history_to_csv(db: Session, file_path="history_export.csv"):
+    history = db.query(models.PromptHistory).all()
+
+    with open(file_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "id", "original_prompt", "improved_prompt",
+            "clarity", "specificity", "actionability", "structure", "context_use",
+            "total_score",
+            "input_tokens", "output_tokens",
+            "model_version", "created_at"
+        ])
+
+        for h in history:
+            writer.writerow([
+                h.id, h.original_prompt, h.improved_prompt,
+                h.clarity, h.specificity, h.actionability, h.structure, h.context_use,
+                h.total_score,
+                h.input_tokens, h.output_tokens,
+                h.model_version, h.created_at
+            ])
+
+    return file_path
