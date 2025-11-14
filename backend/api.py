@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 import uuid
 import logging
@@ -8,6 +8,8 @@ from packages.core.learning import update_rules, should_keep_or_revert
 
 from packages.db.session import get_session
 from packages.db.crud import *
+from packages.db.models import User
+from packages.auth.auth_utils import hash_password, verify_password, create_jwt_token, verify_jwt_token, extract_token_from_header
 import sqlalchemy as sa
 import sys, os
 
@@ -30,9 +32,46 @@ storage = FileStorage("storage")
 
 app = FastAPI(title="Self-Learning Prompt Engineering System", version="1.0.0")
 
+# Authentication dependency function
+def get_authenticated_user(authorization: str = Header(None)) -> str:
+    """
+    Dependency function to extract and verify JWT token
+    Returns user_id if valid, raises HTTPException if not
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    
+    token = extract_token_from_header(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+    
+    token_data = verify_jwt_token(token)
+    if not token_data:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    return token_data.user_id  # Return user_id for use in endpoints
+
+# Authentication Models
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class AuthResponse(BaseModel):
+    token: str
+    user_id: str
+    username: str
+
+class UserInfo(BaseModel):
+    user_id: str
+    username: str
+
+# Existing Models
 class CreatePromptIn(BaseModel):
-    userId: str | None = None
-    text: str
+    text: str  # Removed userId - will get from JWT token
 
 class ImprovePromptIn(BaseModel):
     strategy: str = "v1"  # "v1" | "v2" | "ensemble"
@@ -61,13 +100,96 @@ class PromptDetailsResponse(BaseModel):
 def read_root():
     return {"message": "Self-Learning Prompt Engineering System API", "version": "1.0.0"}
 
-@app.post("/v1/prompts", response_model=CreatePromptResponse)
-def create_prompt(payload: CreatePromptIn):
-    """Create a new prompt and automatically generate first improvement"""
+# Authentication Endpoints
+@app.post("/v1/register", response_model=AuthResponse)
+def register_user(request: RegisterRequest):
+    """Register a new user account"""
     try:
         with get_session() as s:
-            # Create prompt and original version (v0)
-            prompt = create_prompt_row(s, payload.userId, payload.text)
+            # Check if username already exists
+            existing_user = get_user_by_username(s, request.username)
+            
+            if existing_user:
+                raise HTTPException(status_code=400, detail="Username already exists")
+            
+            # Hash password and create user
+            password_hash = hash_password(request.password)
+            new_user = create_user_row(s, request.username, password_hash)
+            s.commit()
+            
+            # Generate JWT token
+            token = create_jwt_token(str(new_user.id), new_user.username)
+            
+            return AuthResponse(
+                token=token,
+                user_id=str(new_user.id),
+                username=new_user.username
+            )
+            
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+
+@app.post("/v1/login", response_model=AuthResponse)
+def login_user(request: LoginRequest):
+    """Login with username and password"""
+    try:
+        with get_session() as s:
+            # Find user by username
+            user = get_user_by_username(s, request.username)
+            
+            if not user:
+                raise HTTPException(status_code=401, detail="Invalid username or password")
+            
+            # Verify password
+            if not verify_password(request.password, user.password_hash):
+                raise HTTPException(status_code=401, detail="Invalid username or password")
+            
+            # Update last login time
+            user.last_login = sa.func.now()
+            s.commit()
+            
+            # Generate JWT token
+            token = create_jwt_token(str(user.id), user.username)
+            
+            return AuthResponse(
+                token=token,
+                user_id=str(user.id),
+                username=user.username
+            )
+            
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Login failed: {str(e)}")
+
+@app.get("/v1/me", response_model=UserInfo)
+def get_current_user(authorization: str = Header(None)):
+    """Get current user information from JWT token"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    
+    token = extract_token_from_header(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+    
+    token_data = verify_jwt_token(token)
+    if not token_data:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+    return UserInfo(
+        user_id=token_data.user_id,
+        username=token_data.username
+    )
+
+@app.post("/v1/prompts", response_model=CreatePromptResponse)
+def create_prompt(payload: CreatePromptIn, user_id: str = Depends(get_authenticated_user)):
+    """Create a new prompt and automatically generate first improvement (Requires Authentication)"""
+    try:
+        with get_session() as s:
+            # Create prompt and original version (v0) - use authenticated user
+            prompt = create_prompt_row(s, user_id, payload.text)
             v0 = create_version_row(s, prompt.id, 0, payload.text, 
                                   explanation={"bullets":["Original"]}, source="original")
             
@@ -115,13 +237,17 @@ def create_prompt(payload: CreatePromptIn):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/prompts/{prompt_id}/improve")
-def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
-    """Generate a new improvement for an existing prompt"""
+def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn, user_id: str = Depends(get_authenticated_user)):
+    """Generate a new improvement for an existing prompt (Requires Authentication)"""
     try:
         with get_session() as s:
-            prompt = get_prompt_by_id(s, uuid.UUID(prompt_id))
+            prompt = get_prompt_by_id(s, prompt_id)
             if not prompt:
                 raise HTTPException(status_code=404, detail="Prompt not found")
+            
+            # Check if user owns this prompt
+            if str(prompt.user_id) != user_id:
+                raise HTTPException(status_code=403, detail="Access denied - not your prompt")
             
             # Get current versions to determine next version number
             versions = get_prompt_versions(s, prompt.id)
@@ -162,17 +288,22 @@ def improve_existing_prompt(prompt_id: str, payload: ImprovePromptIn):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/versions/{version_id}/judge")
-def judge_version(version_id: str, payload: JudgePromptIn):
-    """Re-judge a specific prompt version"""
+def judge_version(version_id: str, payload: JudgePromptIn, user_id: str = Depends(get_authenticated_user)):
+    """Re-judge a specific prompt version (Requires Authentication)"""
     try:
         with get_session() as s:
             # Get the version to judge
             version = s.execute(
-                sa.select(PromptVersion).where(PromptVersion.id == uuid.UUID(version_id))
+                sa.select(PromptVersion).where(PromptVersion.id == version_id)
             ).scalar_one_or_none()
             
             if not version:
                 raise HTTPException(status_code=404, detail="Version not found")
+            
+            # Get the prompt to check ownership
+            prompt = get_prompt_by_id(s, version.prompt_id)
+            if not prompt or str(prompt.user_id) != user_id:
+                raise HTTPException(status_code=403, detail="Access denied - not your prompt version")
             
             # Judge the version
             score = judge_prompt(version.text, rubric=payload.rubric)
@@ -188,16 +319,41 @@ def judge_version(version_id: str, payload: JudgePromptIn):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/v1/prompts")
+def list_user_prompts(user_id: str = Depends(get_authenticated_user)):
+    """Get all prompts for the authenticated user"""
+    try:
+        with get_session() as s:
+            prompts = s.execute(
+                sa.select(Prompt).where(Prompt.user_id == uuid.UUID(user_id)).order_by(Prompt.created_at.desc())
+            ).scalars().all()
+            
+            result = []
+            for prompt in prompts:
+                result.append({
+                    "promptId": str(prompt.id),
+                    "originalText": prompt.original_text,
+                    "createdAt": prompt.created_at.isoformat()
+                })
+            
+            return {"prompts": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/v1/prompts/{prompt_id}/learn")
-def learn_from_prompt(prompt_id: str):
+def learn_from_prompt(prompt_id: str, user_id: str = Depends(get_authenticated_user)):
     """Aggregates all judged versions for a prompt and updates learning state.
-    Uses historical version scores to refine prompt-improvement strategies."""
+    Uses historical version scores to refine prompt-improvement strategies. (Requires Authentication)"""
 
     try:
         with get_session() as s:
-            prompt = get_prompt_by_id(s, uuid.UUID(prompt_id))
+            prompt = get_prompt_by_id(s, prompt_id)
             if not prompt:
                 raise HTTPException(status_code=404, detail="Prompt not found")
+            
+            # Check if user owns this prompt
+            if str(prompt.user_id) != user_id:
+                raise HTTPException(status_code=403, detail="Access denied - not your prompt")
             
             # Get all versions and their scores for learning
             versions = get_prompt_versions(s, prompt.id)
@@ -244,13 +400,17 @@ def learn_from_prompt(prompt_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/prompts/{prompt_id}", response_model=PromptDetailsResponse)
-def get_prompt_details(prompt_id: str):
-    """Get prompt details with original, best version, and history"""
+def get_prompt_details(prompt_id: str, user_id: str = Depends(get_authenticated_user)):
+    """Get prompt details with original, best version, and history (Requires Authentication)"""
     try:
         with get_session() as s:
             prompt = get_prompt_by_id(s, uuid.UUID(prompt_id))
             if not prompt:
                 raise HTTPException(status_code=404, detail="Prompt not found")
+            
+            # Check if user owns this prompt
+            if str(prompt.user_id) != user_id:
+                raise HTTPException(status_code=403, detail="Access denied - not your prompt")
             
             # Get all versions
             versions = get_prompt_versions(s, prompt.id)

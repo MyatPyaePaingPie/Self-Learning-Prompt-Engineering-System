@@ -1,15 +1,24 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import ForeignKey, JSON
+from sqlalchemy import ForeignKey, JSON, String
 import uuid, datetime as dt
 
 class Base(DeclarativeBase): pass
 
+class User(Base):
+    """User model for authentication with username/password"""
+    __tablename__ = "users"
+    
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[str] = mapped_column(String, default=lambda: dt.datetime.utcnow().isoformat())
+
 class Prompt(Base):
     __tablename__ = "prompts"
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[str | None]
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     original_text: Mapped[str]
-    created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+    created_at: Mapped[str] = mapped_column(String, default=lambda: dt.datetime.utcnow().isoformat())
 
 class PromptVersion(Base):
     __tablename__ = "prompt_versions"

@@ -1,40 +1,40 @@
--- 001_init.sql
+-- 001_init_sqlite.sql - SQLite compatible version
 CREATE TABLE prompts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY,
   user_id TEXT,
   original_text TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE prompt_versions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  prompt_id UUID NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
-  version_no INT NOT NULL,               -- 0 = original, 1..n = rewrites
+  id TEXT PRIMARY KEY,
+  prompt_id TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+  version_no INTEGER NOT NULL,
   text TEXT NOT NULL,
-  explanation JSONB NOT NULL,            -- {bullets: [...], diffs: [...]} 
-  source TEXT NOT NULL,                  -- 'original' | 'engine/vX'
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  explanation TEXT NOT NULL,
+  source TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (prompt_id, version_no)
 );
 
 CREATE TABLE judge_scores (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  prompt_version_id UUID NOT NULL REFERENCES prompt_versions(id) ON DELETE CASCADE,
-  clarity NUMERIC NOT NULL CHECK (clarity BETWEEN 0 AND 10),
-  specificity NUMERIC NOT NULL CHECK (specificity BETWEEN 0 AND 10),
-  actionability NUMERIC NOT NULL CHECK (actionability BETWEEN 0 AND 10),
-  structure NUMERIC NOT NULL CHECK (structure BETWEEN 0 AND 10),
-  context_use NUMERIC NOT NULL CHECK (context_use BETWEEN 0 AND 10),
-  total NUMERIC GENERATED ALWAYS AS (clarity+specificity+actionability+structure+context_use) STORED,
-  feedback JSONB NOT NULL,               -- {pros:[], cons:[], summary:""}
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  id TEXT PRIMARY KEY,
+  prompt_version_id TEXT NOT NULL REFERENCES prompt_versions(id) ON DELETE CASCADE,
+  clarity REAL NOT NULL CHECK (clarity BETWEEN 0 AND 10),
+  specificity REAL NOT NULL CHECK (specificity BETWEEN 0 AND 10),
+  actionability REAL NOT NULL CHECK (actionability BETWEEN 0 AND 10),
+  structure REAL NOT NULL CHECK (structure BETWEEN 0 AND 10),
+  context_use REAL NOT NULL CHECK (context_use BETWEEN 0 AND 10),
+  total REAL NOT NULL,
+  feedback TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE best_heads (
-  prompt_id UUID PRIMARY KEY REFERENCES prompts(id) ON DELETE CASCADE,
-  prompt_version_id UUID NOT NULL REFERENCES prompt_versions(id) ON DELETE CASCADE,
-  score NUMERIC NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  prompt_id TEXT PRIMARY KEY REFERENCES prompts(id) ON DELETE CASCADE,
+  prompt_version_id TEXT NOT NULL REFERENCES prompt_versions(id) ON DELETE CASCADE,
+  score REAL NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_prompt_versions_prompt ON prompt_versions(prompt_id);
