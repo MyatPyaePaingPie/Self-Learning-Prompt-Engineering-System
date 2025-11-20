@@ -39,3 +39,14 @@ class BestHead(Base):
     prompt_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prompt_versions.id", ondelete="CASCADE"))
     score: Mapped[float]
     updated_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+
+class SecurityInput(Base):
+    __tablename__ = "security_inputs"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str | None]
+    input_text: Mapped[str]
+    risk_score: Mapped[float]  # 0-100
+    label: Mapped[str]  # "safe", "low-risk", "medium-risk", "high-risk", "blocked"
+    is_blocked: Mapped[bool]
+    metadata: Mapped[dict | None] = mapped_column(JSON, default=None)  # Additional analysis details
+    created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)

@@ -58,6 +58,24 @@ class PromptDetailsResponse(BaseModel):
     best: dict
     history: list[dict]
 
+class SecurityInputIn(BaseModel):
+    userId: str | None = None
+    inputText: str
+    riskScore: float
+    label: str
+    isBlocked: bool
+    metadata: dict | None = None
+
+class SecurityInputResponse(BaseModel):
+    id: str
+    userId: str | None
+    inputText: str
+    riskScore: float
+    label: str
+    isBlocked: bool
+    metadata: dict | None
+    createdAt: str
+
 
 @app.get("/")
 def read_root():
@@ -341,6 +359,69 @@ def get_metrics():
         "message": "Metrics endpoint - TODO: implement actual metrics collection",
         "status": "placeholder"
     }
+
+@app.post("/v1/security/inputs", response_model=SecurityInputResponse)
+def log_security_input(payload: SecurityInputIn):
+    """Log a security input with risk assessment"""
+    try:
+        with get_session() as s:
+            security_input = create_security_input_row(
+                s,
+                payload.userId,
+                payload.inputText,
+                payload.riskScore,
+                payload.label,
+                payload.isBlocked,
+                payload.metadata
+            )
+            s.commit()
+            
+            return SecurityInputResponse(
+                id=str(security_input.id),
+                userId=security_input.user_id,
+                inputText=security_input.input_text,
+                riskScore=security_input.risk_score,
+                label=security_input.label,
+                isBlocked=security_input.is_blocked,
+                metadata=security_input.metadata,
+                createdAt=security_input.created_at.isoformat()
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/v1/security/inputs")
+def get_security_inputs(
+    limit: int = 100,
+    filter_label: str | None = None,
+    filter_blocked: bool | None = None,
+    filter_high_risk: bool | None = None
+):
+    """Get security inputs with optional filtering"""
+    try:
+        with get_session() as s:
+            inputs = get_security_inputs(
+                s,
+                limit=limit,
+                filter_label=filter_label,
+                filter_blocked=filter_blocked,
+                filter_high_risk=filter_high_risk
+            )
+            
+            return [
+                {
+                    "id": str(input.id),
+                    "userId": input.user_id,
+                    "inputText": input.input_text,
+                    "riskScore": input.risk_score,
+                    "label": input.label,
+                    "isBlocked": input.is_blocked,
+                    "metadata": input.metadata,
+                    "createdAt": input.created_at.isoformat()
+                }
+                for input in inputs
+            ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
