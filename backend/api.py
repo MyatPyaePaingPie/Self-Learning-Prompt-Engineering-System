@@ -64,7 +64,7 @@ class SecurityInputIn(BaseModel):
     riskScore: float
     label: str
     isBlocked: bool
-    metadata: dict | None = None
+    analysisMetadata: dict | None = None
 
 class SecurityInputResponse(BaseModel):
     id: str
@@ -73,7 +73,7 @@ class SecurityInputResponse(BaseModel):
     riskScore: float
     label: str
     isBlocked: bool
-    metadata: dict | None
+    analysisMetadata: dict | None
     createdAt: str
 
 
@@ -372,7 +372,7 @@ def log_security_input(payload: SecurityInputIn):
                 payload.riskScore,
                 payload.label,
                 payload.isBlocked,
-                payload.metadata
+                payload.analysisMetadata
             )
             s.commit()
             
@@ -383,14 +383,14 @@ def log_security_input(payload: SecurityInputIn):
                 riskScore=security_input.risk_score,
                 label=security_input.label,
                 isBlocked=security_input.is_blocked,
-                metadata=security_input.metadata,
+                analysisMetadata=security_input.analysis_metadata,
                 createdAt=security_input.created_at.isoformat()
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/security/inputs")
-def get_security_inputs(
+def get_security_inputs_endpoint(
     limit: int = 100,
     filter_label: str | None = None,
     filter_blocked: bool | None = None,
@@ -399,7 +399,8 @@ def get_security_inputs(
     """Get security inputs with optional filtering"""
     try:
         with get_session() as s:
-            inputs = get_security_inputs(
+            from packages.db.crud import get_security_inputs as get_security_inputs_crud
+            inputs = get_security_inputs_crud(
                 s,
                 limit=limit,
                 filter_label=filter_label,
@@ -415,7 +416,7 @@ def get_security_inputs(
                     "riskScore": input.risk_score,
                     "label": input.label,
                     "isBlocked": input.is_blocked,
-                    "metadata": input.metadata,
+                    "analysisMetadata": input.analysis_metadata,
                     "createdAt": input.created_at.isoformat()
                 }
                 for input in inputs

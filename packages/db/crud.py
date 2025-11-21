@@ -69,7 +69,7 @@ def get_best_head(session: Session, prompt_id: uuid.UUID) -> BestHead | None:
 
 def create_security_input_row(session: Session, user_id: str | None, input_text: str, 
                               risk_score: float, label: str, is_blocked: bool, 
-                              metadata: dict | None = None) -> SecurityInput:
+                              analysis_metadata: dict | None = None) -> SecurityInput:
     """Create a new security input record"""
     security_input = SecurityInput(
         user_id=user_id,
@@ -77,7 +77,7 @@ def create_security_input_row(session: Session, user_id: str | None, input_text:
         risk_score=risk_score,
         label=label,
         is_blocked=is_blocked,
-        metadata=metadata
+        analysis_metadata=analysis_metadata
     )
     session.add(security_input)
     session.flush()  # Get the ID without committing
