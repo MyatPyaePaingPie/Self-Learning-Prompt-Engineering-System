@@ -36,3 +36,4 @@ def should_keep_or_revert(scores: list[float], new_score: float, threshold: floa
         return "keep"
     avg_score = sum(scores) / len(scores)
     return "keep" if new_score >= avg_score + threshold else "revert"
+

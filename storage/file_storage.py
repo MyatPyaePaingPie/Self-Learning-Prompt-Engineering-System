@@ -384,6 +384,66 @@ class FileStorage:
         
         print(f"🔍 Found {len(matches)} matches for '{search_term}'")
         return matches
+    
+    def save_version_to_csv(self, prompt_id: str, version) -> str:
+        """
+        Save a prompt version to the version tracking CSV.
+        Week 6 Implementation: Tracks prompt versions with timestamps.
+        
+        Args:
+            prompt_id: UUID of the parent prompt
+            version: PromptVersion object from database with attributes:
+                - id (UUID)
+                - version_no (int)
+                - text (str)
+                - source (str)
+                - explanation (dict)
+                - created_at (datetime)
+        
+        Returns:
+            str: Path to the CSV file
+        """
+        # Ensure .csv extension
+        csv_filename = 'prompt_versions.csv'
+        csv_path = self.base_dir / csv_filename
+        
+        # Version tracking CSV headers (different from learning log headers)
+        headers = [
+            'prompt_id', 'version_no', 'version_uuid', 'text', 
+            'source', 'explanation', 'timestamp'
+        ]
+        
+        # Prepare version data
+        version_data = {
+            'prompt_id': str(prompt_id),
+            'version_no': str(version.version_no),
+            'version_uuid': str(version.id),
+            'text': version.text,
+            'source': version.source,
+            'explanation': json.dumps(version.explanation),
+            'timestamp': version.created_at.isoformat()
+        }
+        
+        # Check if file exists to determine if we need headers
+        file_exists = csv_path.exists()
+        
+        try:
+            with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=headers)
+                
+                # Write header if file is new
+                if not file_exists:
+                    writer.writeheader()
+                
+                # Write the data row
+                writer.writerow(version_data)
+                
+            print(f"✅ Version saved to CSV: {csv_path}")
+            return str(csv_path)
+            
+        except Exception as e:
+            print(f"❌ Error saving version to CSV: {e}")
+            raise
 
 
 def main():

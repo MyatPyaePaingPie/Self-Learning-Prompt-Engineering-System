@@ -1,11 +1,15 @@
 import streamlit as st
 
-st.title("Self-Learning Prompt Engineering System")
-st.header("Simple Form")
+st.set_page_config(
+    page_title="Prompt Engineering System",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Text input
-user_prompt = st.text_input("Enter your prompt:")
+# Sidebar branding
+st.sidebar.title("🚀 Prompt Engineering System")
+st.sidebar.markdown("---")
 
-# Output box
-if user_prompt:
-    st.text_area("Output:", f"Processed: {user_prompt}", height=200)
+# Auto-navigate to home page
+st.switch_page("pages/1_🏠_Home.py")

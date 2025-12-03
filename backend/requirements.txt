@@ -1,2 +1,8 @@
+groq>=0.4.0
 fastapi
 uvicorn
+pydantic
+sqlalchemy
+alembic
+pytest
+python-dotenv

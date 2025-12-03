@@ -1,1 +1,3 @@
 streamlit>=1.28.0
+requests
+tiktoken>=0.5.1

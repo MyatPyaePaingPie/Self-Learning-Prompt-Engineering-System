@@ -101,7 +101,8 @@ class TokenTracker:
         imp_cost = self.calculate_cost(imp_prompt_tok, imp_output_tok, model)
         
         # Totals
-        total_tokens = (orig_prompt_tok + orig_output_tok + imp_prompt_tok +
+
+        total_tokens = (orig_prompt_tok + orig_output_tok + imp_prompt_tok + 
                        imp_output_tok + improvement_tokens + judging_tokens)
         total_cost = orig_cost + imp_cost + improvement_cost + judging_cost
         
@@ -136,4 +137,6 @@ class TokenTracker:
             cost_per_quality_point=cost_per_quality,
             is_worth_it=is_worth_it,
             roi_score=roi_score
+
         )
+
