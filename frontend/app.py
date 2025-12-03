@@ -2,6 +2,7 @@ import streamlit as st
 import time
 import sys
 import os
+import requests
 
 # Add parent directory to Python path so we can import packages
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -140,8 +141,16 @@ def show_dashboard():
         
         # Navigation
         st.subheader("🧭 Navigation")
-        if st.button("🚀 Prompt Enhancement", key="nav_prompts"):
+        if st.button("🚀 Single-Agent Enhancement", key="nav_prompts"):
             st.session_state.current_page = "prompts"
+            st.rerun()
+        
+        if st.button("🤖 Multi-Agent Enhancement", key="nav_multi_agent"):
+            st.session_state.current_page = "multi_agent"
+            st.rerun()
+        
+        if st.button("📈 Agent Effectiveness", key="nav_effectiveness"):
+            st.session_state.current_page = "agent_effectiveness"
             st.rerun()
             
         if st.button("📊 Dashboard", key="nav_dashboard"):
@@ -174,6 +183,10 @@ def show_dashboard():
     # Main content based on current page
     if st.session_state.current_page == "prompts":
         show_prompt_enhancement()
+    elif st.session_state.current_page == "multi_agent":
+        show_multi_agent_enhancement()
+    elif st.session_state.current_page == "agent_effectiveness":
+        show_agent_effectiveness()
     elif st.session_state.current_page == "api_test":
         show_api_testing()
     elif st.session_state.current_page == "token_analytics":
@@ -610,6 +623,242 @@ def show_token_analytics():
     import pandas as pd
     df = pd.DataFrame(breakdown_data)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+def show_multi_agent_enhancement():
+    """Multi-Agent Prompt Enhancement Interface"""
+    st.title("🤖 Multi-Agent Prompt Enhancement")
+    st.markdown("Collaborative prompt optimization using specialized AI agents")
+    
+    # API base URL
+    API_BASE = "http://localhost:8001"
+    
+    # Input section
+    prompt_text = st.text_area(
+        "Enter your prompt:",
+        height=150,
+        placeholder="Example: Write a Python function to sort a list..."
+    )
+    
+    enhancement_type = st.selectbox(
+        "Enhancement Focus:",
+        ["general", "technical", "creative", "persuasive", "clear"]
+    )
+    
+    if st.button("🚀 Enhance with Multi-Agent", type="primary"):
+        if not prompt_text.strip():
+            st.error("Please enter a prompt to enhance")
+            return
+        
+        with st.spinner("Running multi-agent analysis..."):
+            # Call backend endpoint
+            try:
+                response = requests.post(
+                    f"{API_BASE}/prompts/multi-agent-enhance",
+                    headers={"Authorization": f"Bearer {st.session_state.access_token}"},
+                    json={
+                        "text": prompt_text,
+                        "enhancement_type": enhancement_type
+                    }
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("success"):
+                        display_multi_agent_results(result["data"])
+                    else:
+                        st.error(f"Enhancement failed: {result.get('error', 'Unknown error')}")
+                else:
+                    st.error(f"Request failed with status {response.status_code}")
+            except Exception as e:
+                st.error(f"Error calling backend: {e}")
+
+def display_multi_agent_results(data):
+    """Display multi-agent enhancement results"""
+    import pandas as pd
+    
+    # Final result (top section)
+    st.subheader("✨ Enhanced Prompt")
+    st.success(data["enhanced_text"])
+    
+    # Decision info
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Selected Agent", data["selected_agent"].title())
+    with col2:
+        st.info(data["decision_rationale"])
+    
+    st.divider()
+    
+    # Agent comparison section
+    st.subheader("🔍 Agent Analysis")
+    
+    # Create tabs for each agent
+    agent_results = data["agent_results"]
+    agent_tabs = st.tabs([r["agent_name"].title() for r in agent_results])
+    
+    for tab, result in zip(agent_tabs, agent_results):
+        with tab:
+            display_agent_result(result, is_winner=(result["agent_name"] == data["selected_agent"]))
+    
+    # Vote breakdown visualization
+    st.subheader("📊 Vote Breakdown")
+    display_vote_breakdown(data["vote_breakdown"])
+
+def display_agent_result(result, is_winner):
+    """Display individual agent result"""
+    
+    # Winner badge
+    if is_winner:
+        st.success("🏆 Selected Agent")
+    
+    # Score and confidence
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Score", f"{result['analysis']['score']:.1f}/10")
+    with col2:
+        st.metric("Confidence", f"{result['suggestions']['confidence']:.0%}")
+    with col3:
+        focus = result["metadata"].get("focus", "N/A")
+        st.metric("Focus", focus.title())
+    
+    # Strengths and weaknesses
+    col_strength, col_weakness = st.columns(2)
+    
+    with col_strength:
+        st.write("**✅ Strengths:**")
+        for strength in result["analysis"]["strengths"]:
+            st.write(f"- {strength}")
+    
+    with col_weakness:
+        st.write("**⚠️ Weaknesses:**")
+        for weakness in result["analysis"]["weaknesses"]:
+            st.write(f"- {weakness}")
+    
+    # Suggestions
+    st.write("**💡 Suggested Improvements:**")
+    for i, suggestion in enumerate(result["suggestions"]["suggestions"], 1):
+        st.write(f"{i}. {suggestion}")
+    
+    # Agent's improved version (expandable)
+    with st.expander("View this agent's improved version"):
+        st.code(result["suggestions"]["improved_prompt"], language="text")
+
+def display_vote_breakdown(vote_breakdown):
+    """Display vote breakdown as bar chart"""
+    import pandas as pd
+    
+    # Create DataFrame for chart
+    df = pd.DataFrame({
+        "Agent": [name.title() for name in vote_breakdown.keys()],
+        "Score": list(vote_breakdown.values())
+    })
+    
+    # Sort by score descending
+    df = df.sort_values("Score", ascending=False)
+    
+    # Display bar chart
+    st.bar_chart(df.set_index("Agent"))
+    
+    # Display table
+    st.dataframe(df, hide_index=True)
+
+def show_agent_effectiveness():
+    """Display agent effectiveness statistics"""
+    import pandas as pd
+    
+    st.title("📈 Agent Effectiveness Dashboard")
+    st.markdown("Track which agents perform best over time")
+    
+    API_BASE = "http://localhost:8001"
+    
+    # Fetch effectiveness data from backend
+    with st.spinner("Loading agent statistics..."):
+        try:
+            response = requests.get(
+                f"{API_BASE}/prompts/agent-effectiveness",
+                headers={"Authorization": f"Bearer {st.session_state.access_token}"}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                effectiveness = result.get("data", {})
+            else:
+                st.error(f"Failed to fetch data: {response.status_code}")
+                effectiveness = {}
+        except Exception as e:
+            st.error(f"Failed to fetch effectiveness: {e}")
+            effectiveness = {}
+    
+    if not effectiveness:
+        st.info("No multi-agent requests yet. Try enhancing a prompt first!")
+        return
+    
+    # Overall statistics
+    st.subheader("Overall Performance")
+    
+    cols = st.columns(len(effectiveness))
+    for col, (agent_name, stats) in zip(cols, effectiveness.items()):
+        with col:
+            st.metric(
+                agent_name.title(),
+                f"{stats['wins']} wins",
+                f"{stats['win_rate']:.0%} win rate"
+            )
+            st.caption(f"Avg Score: {stats['avg_score']:.1f}/10")
+    
+    # Win rate comparison chart
+    st.subheader("Win Rate Comparison")
+    display_win_rate_chart(effectiveness)
+    
+    # Detailed statistics table
+    st.subheader("Detailed Statistics")
+    display_effectiveness_table(effectiveness)
+
+def display_win_rate_chart(effectiveness):
+    """Display win rate as progress bars"""
+    # Alternative: Use columns for visual representation
+    total_wins = sum(stats["wins"] for stats in effectiveness.values())
+    
+    if total_wins > 0:
+        st.write("**Distribution of Winning Agents:**")
+        for agent_name, stats in effectiveness.items():
+            percentage = stats["wins"] / total_wins * 100
+            st.progress(stats["wins"] / total_wins, text=f"{agent_name.title()}: {percentage:.1f}%")
+    else:
+        st.info("No wins recorded yet")
+
+def display_effectiveness_table(effectiveness):
+    """Display effectiveness as detailed table"""
+    import pandas as pd
+    
+    # Create DataFrame
+    df = pd.DataFrame([
+        {
+            "Agent": name.title(),
+            "Wins": stats["wins"],
+            "Win Rate": f"{stats['win_rate']:.1%}",
+            "Avg Score": f"{stats['avg_score']:.1f}/10"
+        }
+        for name, stats in effectiveness.items()
+    ])
+    
+    # Sort by wins descending
+    df = df.sort_values("Wins", ascending=False)
+    
+    st.dataframe(df, hide_index=True, use_container_width=True)
+
+def show_multi_agent_history():
+    """View multi-agent request history"""
+    st.title("📜 Multi-Agent Request History")
+    
+    st.info("💡 Click any request to see detailed agent contributions")
+    
+    # Placeholder for MVP - will be implemented in Phase 2
+    st.warning("⚠️ History view coming soon! This feature will be available once Phase 2 storage is complete.")
+    
+    # TODO: Implement based on Phase 2 storage structure
+    # For MVP: Could read CSV directly or add backend endpoint
+    pass
 
 def show_security_dashboard():
     """Show security input monitoring dashboard."""

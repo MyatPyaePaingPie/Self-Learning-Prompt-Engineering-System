@@ -444,6 +444,194 @@ class FileStorage:
         except Exception as e:
             print(f"❌ Error saving version to CSV: {e}")
             raise
+    
+    def save_multi_agent_result(
+        self,
+        request_id: str,
+        original_prompt: str,
+        agent_results: List[Dict[str, Any]],
+        decision: Dict[str, Any]
+    ) -> str:
+        """
+        Save multi-agent results to CSV (Week 11 - Multi-Agent Enhancement).
+        
+        Args:
+            request_id: Unique request identifier
+            original_prompt: Original prompt text
+            agent_results: List of AgentResult dicts from Phase 1
+            decision: CoordinatorDecision dict from Phase 1
+        
+        Returns:
+            Path to CSV file
+        """
+        csv_filename = 'multi_agent_log.csv'
+        csv_path = self.base_dir / csv_filename
+        
+        # Flatten agent results for CSV columns
+        data = {
+            'request_id': request_id,
+            'timestamp': datetime.now().isoformat(),
+            'original_prompt': original_prompt,
+            'final_prompt': decision['final_prompt'],
+            'selected_agent': decision['selected_agent'],
+            'decision_rationale': decision['decision_rationale']
+        }
+        
+        # Add per-agent columns (dynamic based on agents present)
+        for result in agent_results:
+            agent_name = result['agent_name']
+            data[f'{agent_name}_score'] = result['analysis']['score']
+            data[f'{agent_name}_confidence'] = result['suggestions']['confidence']
+            data[f'{agent_name}_suggestions'] = json.dumps(result['suggestions']['suggestions'])
+            data[f'{agent_name}_improved'] = result['suggestions']['improved_prompt']
+        
+        # Add vote breakdown
+        data['vote_breakdown'] = json.dumps(decision['vote_breakdown'])
+        
+        # Build headers dynamically based on agents present
+        base_headers = ['request_id', 'timestamp', 'original_prompt', 'final_prompt', 'selected_agent', 'decision_rationale']
+        agent_headers = []
+        for result in agent_results:
+            agent_name = result['agent_name']
+            agent_headers.extend([
+                f'{agent_name}_score',
+                f'{agent_name}_confidence',
+                f'{agent_name}_suggestions',
+                f'{agent_name}_improved'
+            ])
+        headers = base_headers + agent_headers + ['vote_breakdown']
+        
+        # Check if file exists to determine if we need headers
+        file_exists = csv_path.exists()
+        
+        try:
+            with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=headers)
+                
+                # Write header if file is new
+                if not file_exists:
+                    writer.writeheader()
+                
+                # Write the data row
+                writer.writerow({key: data.get(key, '') for key in headers})
+            
+            print(f"✅ Multi-agent result saved to CSV: {csv_path}")
+            return str(csv_path)
+            
+        except Exception as e:
+            print(f"❌ Error saving multi-agent result to CSV: {e}")
+            raise
+    
+    def get_agent_effectiveness(self, csv_filename: str = 'multi_agent_log.csv') -> Dict[str, Any]:
+        """
+        Analyze agent effectiveness from multi-agent logs.
+        
+        Args:
+            csv_filename: Name of the CSV file (default: multi_agent_log.csv)
+        
+        Returns:
+            Dict with agent statistics:
+            {
+                "syntax": {"wins": 10, "avg_score": 8.5, "win_rate": 0.33},
+                "structure": {"wins": 15, "avg_score": 9.0, "win_rate": 0.50},
+                "domain": {"wins": 5, "avg_score": 7.8, "win_rate": 0.17}
+            }
+        """
+        data = self.read_from_csv(csv_filename)
+        
+        if not data:
+            return {}
+        
+        # Count wins per agent
+        wins = {}
+        scores = {}
+        
+        for entry in data:
+            selected = entry.get('selected_agent', '')
+            if selected:
+                wins[selected] = wins.get(selected, 0) + 1
+            
+            # Aggregate scores for all agents
+            # Dynamically detect agent columns
+            for key in entry.keys():
+                if key.endswith('_score'):
+                    agent_name = key.replace('_score', '')
+                    if agent_name not in scores:
+                        scores[agent_name] = []
+                    try:
+                        scores[agent_name].append(float(entry[key]))
+                    except (ValueError, TypeError):
+                        pass  # Skip invalid scores
+        
+        # Calculate statistics
+        total_requests = len(data)
+        effectiveness = {}
+        
+        # Get all unique agents (from wins and scores)
+        all_agents = set(wins.keys()) | set(scores.keys())
+        
+        for agent in all_agents:
+            effectiveness[agent] = {
+                "wins": wins.get(agent, 0),
+                "win_rate": wins.get(agent, 0) / total_requests if total_requests > 0 else 0.0,
+                "avg_score": sum(scores.get(agent, [])) / len(scores.get(agent, [])) if agent in scores and scores[agent] else 0.0
+            }
+        
+        return effectiveness
+    
+    def get_agent_contributions(self, request_id: str, csv_filename: str = 'multi_agent_log.csv') -> Optional[Dict[str, Any]]:
+        """
+        Get all agent contributions for a specific request.
+        
+        Args:
+            request_id: Request ID to look up
+            csv_filename: Name of the CSV file (default: multi_agent_log.csv)
+        
+        Returns:
+            Dict with all agent results and decision for that request, or None if not found
+        """
+        data = self.read_from_csv(csv_filename)
+        
+        for entry in data:
+            if entry.get('request_id') == request_id:
+                # Parse agent results from flattened CSV
+                agents = []
+                
+                # Dynamically detect agents from column names
+                agent_names = set()
+                for key in entry.keys():
+                    if key.endswith('_score'):
+                        agent_names.add(key.replace('_score', ''))
+                
+                for agent_name in agent_names:
+                    score_key = f'{agent_name}_score'
+                    confidence_key = f'{agent_name}_confidence'
+                    suggestions_key = f'{agent_name}_suggestions'
+                    improved_key = f'{agent_name}_improved'
+                    
+                    if all(k in entry for k in [score_key, confidence_key, suggestions_key, improved_key]):
+                        try:
+                            agents.append({
+                                'agent_name': agent_name,
+                                'score': float(entry[score_key]),
+                                'confidence': float(entry[confidence_key]),
+                                'suggestions': json.loads(entry[suggestions_key]),
+                                'improved_prompt': entry[improved_key]
+                            })
+                        except (ValueError, TypeError, json.JSONDecodeError) as e:
+                            print(f"⚠️  Warning: Error parsing agent {agent_name} data: {e}")
+                
+                return {
+                    'request_id': request_id,
+                    'original_prompt': entry.get('original_prompt', ''),
+                    'final_prompt': entry.get('final_prompt', ''),
+                    'selected_agent': entry.get('selected_agent', ''),
+                    'decision_rationale': entry.get('decision_rationale', ''),
+                    'agent_contributions': agents,
+                    'vote_breakdown': json.loads(entry.get('vote_breakdown', '{}'))
+                }
+        
+        return None  # Not found
 
 
 def main():

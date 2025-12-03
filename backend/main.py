@@ -296,6 +296,155 @@ async def get_user_prompts(current_user: User = Depends(get_current_user)):
         }
     }
 
+# Multi-Agent Enhancement Endpoints (Week 11)
+
+from packages.core.agent_registry import AgentRegistry
+from packages.core.agent_coordinator import AgentCoordinator
+from storage.file_storage import FileStorage
+
+# Singleton coordinator (uses registry internally)
+_multi_agent_coordinator = None
+# Singleton file storage (Week 11 - Phase 2)
+_file_storage = None
+
+def get_multi_agent_coordinator() -> AgentCoordinator:
+    """Get coordinator with default agents (syntax, structure, domain)"""
+    global _multi_agent_coordinator
+    
+    if not _multi_agent_coordinator:
+        _multi_agent_coordinator = AgentCoordinator()  # Uses default agents from registry
+    
+    return _multi_agent_coordinator
+
+def get_file_storage() -> FileStorage:
+    """Get file storage singleton"""
+    global _file_storage
+    
+    if not _file_storage:
+        # Initialize with storage directory
+        import os
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        _file_storage = FileStorage(base_dir=storage_dir)
+    
+    return _file_storage
+
+@app.post("/prompts/multi-agent-enhance")
+@limiter.limit("5/minute")  # Lower limit (3 LLM calls per request)
+async def multi_agent_enhance(
+    request: Request,
+    prompt_data: PromptEnhanceRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Enhance prompt using multi-agent collaboration (Week 11)."""
+    try:
+        # Get coordinator (uses registry internally)
+        coordinator = get_multi_agent_coordinator()
+        decision = await coordinator.coordinate(prompt_data.text)
+        
+        # Add model info to response
+        agent_results_with_models = []
+        for result in decision.agent_results:
+            result_dict = result.dict()
+            
+            # Add model info from registry
+            metadata = AgentRegistry.get_metadata(result.agent_name)
+            if metadata:
+                result_dict["model_used"] = {
+                    "model_id": metadata.model_config.model_id,
+                    "display_name": metadata.model_config.display_name,
+                    "speed": metadata.model_config.speed.value,
+                    "cost": metadata.model_config.cost.value
+                }
+            agent_results_with_models.append(result_dict)
+        
+        # Generate request ID for tracking
+        request_id = str(uuid.uuid4())
+        
+        # Log to storage (Phase 2 - L:IV atomicity, don't block on failure)
+        try:
+            file_storage = get_file_storage()
+            file_storage.save_multi_agent_result(
+                request_id=request_id,
+                original_prompt=prompt_data.text,
+                agent_results=[r.dict() for r in decision.agent_results],
+                decision=decision.dict()
+            )
+        except Exception as storage_error:
+            # Don't fail request if logging fails (L:IV atomicity)
+            logger.error(f"Failed to log multi-agent result: {storage_error}")
+        
+        return {
+            "success": True,
+            "data": {
+                "request_id": request_id,
+                "original_text": prompt_data.text,
+                "enhanced_text": decision.final_prompt,
+                "selected_agent": decision.selected_agent,
+                "decision_rationale": decision.decision_rationale,
+                "agent_results": agent_results_with_models,
+                "vote_breakdown": decision.vote_breakdown,
+                "created_at": datetime.utcnow().isoformat(),
+                "user_id": current_user.id
+            }
+        }
+    except Exception as e:
+        logger.error(f"Multi-agent enhancement failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Multi-agent enhancement failed: {str(e)}"
+        )
+
+@app.get("/prompts/available-agents")
+async def get_available_agents(current_user: User = Depends(get_current_user)):
+    """Get list of available agents and their model configurations."""
+    try:
+        agents = []
+        for agent_name in AgentRegistry.get_all_agents():
+            metadata = AgentRegistry.get_metadata(agent_name)
+            if metadata:
+                agents.append({
+                    "name": agent_name,
+                    "display_name": metadata.display_name,
+                    "description": metadata.description,
+                    "focus_areas": metadata.focus_areas,
+                    "model": {
+                        "model_id": metadata.model_config.model_id,
+                        "display_name": metadata.model_config.display_name,
+                        "speed": metadata.model_config.speed.value,
+                        "cost": metadata.model_config.cost.value,
+                        "use_case": metadata.model_config.use_case
+                    }
+                })
+        
+        return {
+            "success": True,
+            "data": {"agents": agents}
+        }
+    except Exception as e:
+        logger.error(f"Failed to get available agents: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get available agents"
+        )
+
+@app.get("/prompts/agent-effectiveness")
+async def get_agent_effectiveness(current_user: User = Depends(get_current_user)):
+    """Get agent effectiveness statistics (Week 11 - Phase 2)."""
+    try:
+        file_storage = get_file_storage()
+        effectiveness = file_storage.get_agent_effectiveness()
+        
+        return {
+            "success": True,
+            "data": effectiveness
+        }
+    except Exception as e:
+        logger.error(f"Failed to get agent effectiveness: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get agent effectiveness"
+        )
+
 def apply_prompt_enhancement(text: str, enhancement_type: str, context: Optional[str] = None) -> str:
     """Apply prompt enhancement using structured template approach."""
     

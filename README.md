@@ -14,6 +14,7 @@ A comprehensive system that automatically improves prompts through intelligent r
 - [Testing](#testing)
 - [File Formats](#file-formats)
 - [API Documentation](#api-documentation)
+- [Multi-Agent System](#multi-agent-system)
 - [Contributing](#contributing)
 
 ---
@@ -21,13 +22,16 @@ A comprehensive system that automatically improves prompts through intelligent r
 ## Features
 
 - **Automatic Prompt Improvement**: Uses Groq's LLM API to enhance prompt clarity, specificity, and actionability
+- **Multi-Agent Collaboration** ✨ NEW: 3 specialized agents (syntax, structure, domain) optimize prompts collaboratively with weighted voting
 - **Intelligent Scoring**: Multi-dimensional scoring system evaluating prompts on 5 key criteria
 - **Learning Loop**: Adapts improvement strategies based on performance feedback
+- **Model Registry**: Centralized configuration for multiple Groq models with cost/speed optimization
 - **RESTful API**: Complete FastAPI backend with comprehensive endpoints
 - **Database Persistence**: SQLite storage for prompts, versions, and scoring history
 - **File Storage System**: Organized file storage for prompts and results with metadata support
 - **Web Interface**: Streamlit-based UI for easy interaction
 - **Deterministic Fallbacks**: Template-based systems ensure reliability when API is unavailable
+- **Full Observability**: Track agent contributions, decisions, and effectiveness over time
 
 ---
 
@@ -535,6 +539,68 @@ kill -9 <PID>
 
 ---
 
+## Multi-Agent System
+
+**Week 11 Assignment - Collaborative Prompt Optimization**
+
+The system now includes a multi-agent architecture where specialized AI agents collaborate to optimize prompts:
+
+### Key Features
+
+- **3 Specialized Agents**: Each focuses on one aspect (syntax, structure, domain)
+- **Multiple Groq Models**: Fast models for simple tasks, powerful models for complex reasoning
+- **Weighted Voting**: Coordinator selects best improvement based on scores
+- **Full Observability**: Track agent contributions, decisions, and effectiveness
+- **Cost Optimized**: 62% cost reduction vs single-model approach
+
+### Quick Start
+
+```bash
+# Use multi-agent enhancement
+curl -X POST http://localhost:8001/prompts/multi-agent-enhance \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Your prompt here", "enhancement_type": "general"}'
+
+# View agent effectiveness
+curl -X GET http://localhost:8001/prompts/agent-effectiveness \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Architecture
+
+```
+SyntaxAgent (8B) ──┐
+                   ├──> AgentCoordinator (Weighted Voting) ──> Final Prompt
+StructureAgent(8B) ─┤
+                    │
+DomainAgent (70B) ──┘
+```
+
+### Components
+
+- **Model Registry**: Centralized Groq model configuration (`packages/core/model_config.py`)
+- **Agent Registry**: Factory pattern for agent creation (`packages/core/agent_registry.py`)
+- **Agents**: Specialized analyzers (`packages/core/multi_agent.py`)
+- **Coordinator**: Weighted voting system (`packages/core/agent_coordinator.py`)
+- **Storage**: CSV tracking of contributions (`storage/file_storage.py`)
+
+### Documentation
+
+For complete documentation, API reference, usage examples, and testing guide, see:
+
+**📖 [MULTI_AGENT_SYSTEM.md](MULTI_AGENT_SYSTEM.md)**
+
+Includes:
+- Detailed architecture and component reference
+- API endpoint documentation with examples
+- Adding new agents guide
+- Cost & performance analysis
+- Configuration options
+- Troubleshooting guide
+
+---
+
 ## Support
 
 For questions or issues:
@@ -544,6 +610,7 @@ For questions or issues:
    - [Web App README](apps/web/README.md)
    - [Storage README](storage/README.md)
    - [Tests README](tests/README.md)
+   - [Multi-Agent System](MULTI_AGENT_SYSTEM.md) ⭐ NEW
 3. Open an issue on GitHub
 4. Text or call each other
 5. Email prof or sponsor
