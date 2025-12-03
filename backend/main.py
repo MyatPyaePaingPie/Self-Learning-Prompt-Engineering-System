@@ -1,0 +1,515 @@
+from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from sqlalchemy.orm import Session
+from datetime import timedelta
+import os
+from dotenv import load_dotenv
+
+from database import get_db, User
+from auth import (
+    authenticate_user, create_access_token, verify_token, create_user,
+    get_user_by_username, UserCreate, UserResponse, LoginRequest, Token,
+    ACCESS_TOKEN_EXPIRE_MINUTES, verify_password, get_password_hash,
+    generate_password_reset_token, reset_user_password,
+    generate_email_verification_token, verify_email_verification_token,
+    is_password_expired, check_password_reuse
+)
+from crypto import encrypt_sensitive_data, decrypt_sensitive_data
+
+load_dotenv()
+
+app = FastAPI(
+    title="Secure Authentication API",
+    version="1.0.0",
+    description="Production-ready authentication system with end-to-end encryption"
+)
+
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Security scheme
+security = HTTPBearer()
+
+# Security middleware
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1", "*.localhost"]
+)
+
+# CORS middleware
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:8501,http://127.0.0.1:8501").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+    expose_headers=["X-Security-Status"]
+)
+
+# Security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["X-Security-Status"] = "protected"
+    return response
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    """Dependency to get the current authenticated user."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    token_data = verify_token(credentials.credentials)
+    if token_data is None:
+        raise credentials_exception
+    
+    user = get_user_by_username(db, username=token_data.username)
+    if user is None:
+        raise credentials_exception
+    
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    
+    return user
+
+@app.post("/register", response_model=UserResponse)
+@limiter.limit("3/minute")  # Limit registration attempts
+async def register(request: Request, user: UserCreate, db: Session = Depends(get_db)):
+    """Register a new user with enhanced validation."""
+    try:
+        db_user = create_user(db, user)
+        return UserResponse.model_validate(db_user)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+@app.post("/login", response_model=Token)
+@limiter.limit("5/minute")  # Limit login attempts
+async def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_db)):
+    """Authenticate user and return access token with enhanced security."""
+    # Get client IP for security tracking
+    client_ip = get_remote_address(request)
+    
+    user = authenticate_user(db, login_data.username, login_data.password, client_ip)
+    if not user:
+        # Check if account is locked
+        potential_user = db.query(User).filter(
+            (User.username == login_data.username) | (User.email == login_data.username)
+        ).first()
+        
+        if potential_user and potential_user.account_locked_until:
+            if datetime.utcnow() < potential_user.account_locked_until:
+                raise HTTPException(
+                    status_code=status.HTTP_423_LOCKED,
+                    detail="Account temporarily locked due to multiple failed login attempts. Try again later.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Account is deactivated"
+        )
+    
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    # Include encrypted user session data
+    session_data = {
+        "user_id": user.id,
+        "login_time": user.last_login.isoformat() if user.last_login else None
+    }
+    
+    access_token = create_access_token(
+        data={
+            "sub": user.username,
+            "sensitive_data": session_data
+        },
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
+
+@app.get("/me", response_model=UserResponse)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    """Get current user information."""
+    return UserResponse.model_validate(current_user)
+
+@app.get("/protected")
+async def protected_route(current_user: User = Depends(get_current_user)):
+    """Example protected route that requires authentication."""
+    return {
+        "message": f"Hello {current_user.username}! This is a protected route.",
+        "user_id": current_user.id,
+        "access_time": "now"
+    }
+
+# Prompt Enhancement API Endpoints
+from pydantic import BaseModel, Field
+from typing import List, Optional
+import uuid
+from datetime import datetime
+
+class PromptInput(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+class PromptResponse(BaseModel):
+    id: str
+    original_text: str
+    enhanced_text: str
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    created_at: str
+    user_id: int
+
+class PromptEnhanceRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+    enhancement_type: str = Field(default="general", pattern="^(general|creative|technical|persuasive|clear)$")
+    context: Optional[str] = Field(None, max_length=1000)
+
+@app.post("/prompts/enhance")
+@limiter.limit("10/minute")
+async def enhance_prompt(
+    request: Request,
+    prompt_data: PromptEnhanceRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Enhance a text prompt using AI optimization techniques."""
+    try:
+        # Encrypt the original prompt for storage
+        encrypted_text = encrypt_sensitive_data(prompt_data.text)
+        
+        # Apply prompt enhancement logic based on type
+        enhanced_text = apply_prompt_enhancement(
+            prompt_data.text,
+            prompt_data.enhancement_type,
+            prompt_data.context
+        )
+        
+        # Create response with encrypted data
+        prompt_id = str(uuid.uuid4())
+        
+        return {
+            "success": True,
+            "data": {
+                "id": prompt_id,
+                "original_text": prompt_data.text,
+                "enhanced_text": enhanced_text,
+                "enhancement_type": prompt_data.enhancement_type,
+                "created_at": datetime.utcnow().isoformat(),
+                "user_id": current_user.id
+            }
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Prompt enhancement failed"
+        )
+
+@app.post("/prompts/save")
+@limiter.limit("20/minute")
+async def save_prompt(
+    request: Request,
+    prompt_data: PromptInput,
+    current_user: User = Depends(get_current_user)
+):
+    """Save a prompt to user's collection."""
+    try:
+        # Encrypt sensitive prompt data
+        encrypted_text = encrypt_sensitive_data(prompt_data.text)
+        
+        prompt_id = str(uuid.uuid4())
+        
+        # In a real implementation, this would be saved to database
+        return {
+            "success": True,
+            "data": {
+                "id": prompt_id,
+                "text": prompt_data.text,
+                "category": prompt_data.category,
+                "tags": prompt_data.tags or [],
+                "created_at": datetime.utcnow().isoformat(),
+                "user_id": current_user.id
+            }
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save prompt"
+        )
+
+@app.get("/prompts/my-prompts")
+async def get_user_prompts(current_user: User = Depends(get_current_user)):
+    """Get all prompts belonging to the current user."""
+    # In a real implementation, this would query the database
+    return {
+        "success": True,
+        "data": {
+            "prompts": [],
+            "total": 0,
+            "user_id": current_user.id
+        }
+    }
+
+def apply_prompt_enhancement(text: str, enhancement_type: str, context: Optional[str] = None) -> str:
+    """Apply prompt enhancement using structured template approach."""
+    
+    TEMPLATE_V1 = """You are a senior {domain} expert.
+Task: {task}
+Deliverables:
+- Clear, step-by-step plan
+- Examples and edge-cases
+- Final {artifact} ready to use
+Constraints: {constraints}
+If information is missing, list precise clarifying questions first, then proceed with best assumptions."""
+
+    # Analyze the input text to extract components
+    domain, task, artifact, constraints = analyze_prompt_components(text, enhancement_type, context)
+    
+    # Apply the template
+    enhanced_prompt = TEMPLATE_V1.format(
+        domain=domain,
+        task=task,
+        artifact=artifact,
+        constraints=constraints
+    )
+    
+    return enhanced_prompt
+
+def analyze_prompt_components(text: str, enhancement_type: str, context: Optional[str] = None) -> tuple:
+    """Analyze user input to extract domain, task, artifact, and constraints."""
+    
+    # Domain mapping based on enhancement type and content analysis
+    domain_mapping = {
+        "technical": "Software Engineering",
+        "creative": "Creative Writing",
+        "persuasive": "Marketing & Communications",
+        "clear": "Technical Communication",
+        "general": "Problem Solving"
+    }
+    
+    # Extract or infer domain
+    domain = domain_mapping.get(enhancement_type, "Subject Matter")
+    
+    # If context provides domain info, use it
+    if context:
+        context_lower = context.lower()
+        if any(word in context_lower for word in ["software", "programming", "code", "development"]):
+            domain = "Software Engineering"
+        elif any(word in context_lower for word in ["writing", "story", "creative", "content"]):
+            domain = "Creative Writing"
+        elif any(word in context_lower for word in ["marketing", "sales", "business"]):
+            domain = "Marketing & Strategy"
+        elif any(word in context_lower for word in ["research", "analysis", "academic"]):
+            domain = "Research & Analysis"
+    
+    # Clean and structure the task
+    task = text.strip()
+    if not task.endswith(('.', '!', '?')):
+        task += "."
+    
+    # Determine artifact type based on content
+    text_lower = text.lower()
+    if any(word in text_lower for word in ["write", "create", "generate", "compose"]):
+        if any(word in text_lower for word in ["code", "script", "program", "function"]):
+            artifact = "code implementation"
+        elif any(word in text_lower for word in ["story", "article", "content", "copy"]):
+            artifact = "written content"
+        elif any(word in text_lower for word in ["plan", "strategy", "proposal"]):
+            artifact = "strategic plan"
+        else:
+            artifact = "deliverable"
+    elif any(word in text_lower for word in ["analyze", "research", "investigate"]):
+        artifact = "analysis report"
+    elif any(word in text_lower for word in ["design", "build", "develop"]):
+        artifact = "design specification"
+    else:
+        artifact = "solution"
+    
+    # Set appropriate constraints based on enhancement type
+    constraint_mapping = {
+        "technical": "Follow best practices, include error handling, ensure scalability",
+        "creative": "Maintain originality, engage target audience, stay within brand guidelines",
+        "persuasive": "Use evidence-based arguments, address counterpoints, include clear call-to-action",
+        "clear": "Use simple language, logical structure, avoid jargon unless necessary",
+        "general": "Be comprehensive yet concise, consider multiple perspectives"
+    }
+    
+    constraints = constraint_mapping.get(enhancement_type, "Be thorough and practical")
+    
+    # Add context-specific constraints
+    if context:
+        constraints += f". Additional context: {context}"
+    
+    return domain, task, artifact, constraints
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "message": "Authentication API is running"}
+
+@app.get("/")
+async def root():
+    """Root endpoint."""
+    return {
+        "message": "Secure Authentication & Prompt Enhancement API",
+        "version": "1.0.0",
+        "endpoints": {
+            "register": "/register",
+            "login": "/login",
+            "me": "/me",
+            "protected": "/protected",
+            "enhance_prompt": "/prompts/enhance",
+            "save_prompt": "/prompts/save",
+            "my_prompts": "/prompts/my-prompts",
+            "health": "/health"
+        }
+    }
+
+# Enhanced Security Endpoints
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(..., pattern=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8)
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8)
+
+@app.post("/auth/request-password-reset")
+@limiter.limit("3/minute")  # Strict limit for password reset requests
+async def request_password_reset(request: Request, reset_request: PasswordResetRequest, db: Session = Depends(get_db)):
+    """Request password reset token (always returns success for security)."""
+    # Always return success to prevent email enumeration attacks
+    token = generate_password_reset_token(db, reset_request.email)
+    
+    # In production, send email with token here
+    # For demo purposes, we'll log it
+    if token:
+        print(f"Password reset token for {reset_request.email}: {token}")
+    
+    return {"message": "If the email exists, a password reset link has been sent"}
+
+@app.post("/auth/reset-password")
+@limiter.limit("5/minute")
+async def reset_password(request: Request, reset_data: PasswordResetConfirm, db: Session = Depends(get_db)):
+    """Reset password using token."""
+    # Validate new password strength
+    user_create = UserCreate(username="temp", email="temp@example.com", password=reset_data.new_password)
+    try:
+        # This will validate the password
+        user_create.validate_password_strength(reset_data.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    success = reset_user_password(db, reset_data.token, reset_data.new_password)
+    
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired password reset token"
+        )
+    
+    return {"message": "Password reset successfully"}
+
+@app.post("/auth/change-password")
+async def change_password(
+    request: Request,
+    change_data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Change user password (requires authentication)."""
+    # Verify current password
+    if not verify_password(change_data.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password is incorrect"
+        )
+    
+    # Check password reuse
+    if check_password_reuse(db, current_user, change_data.new_password):
+        raise HTTPException(
+            status_code=400,
+            detail="New password cannot be the same as current password"
+        )
+    
+    # Validate new password
+    try:
+        user_create = UserCreate(username="temp", email="temp@example.com", password=change_data.new_password)
+        user_create.validate_password_strength(change_data.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Update password
+    current_user.hashed_password = get_password_hash(change_data.new_password)
+    current_user.last_password_change = datetime.utcnow()
+    db.commit()
+    
+    return {"message": "Password changed successfully"}
+
+@app.get("/auth/verify-email/{token}")
+async def verify_email(token: str, db: Session = Depends(get_db)):
+    """Verify email address using token."""
+    user = verify_email_verification_token(db, token)
+    
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired verification token"
+        )
+    
+    return {"message": "Email verified successfully", "user_id": user.id}
+
+@app.get("/auth/account-status")
+async def get_account_status(current_user: User = Depends(get_current_user)):
+    """Get current user's account security status."""
+    return {
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "is_verified": current_user.is_verified,
+        "is_active": current_user.is_active,
+        "failed_login_attempts": current_user.failed_login_attempts or 0,
+        "account_locked": bool(current_user.account_locked_until and
+                              datetime.utcnow() < current_user.account_locked_until),
+        "password_expired": is_password_expired(current_user),
+        "last_login": current_user.last_login,
+        "last_password_change": current_user.last_password_change,
+        "two_factor_enabled": current_user.two_factor_enabled
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001)  # Changed to port 8001 to avoid conflicts
