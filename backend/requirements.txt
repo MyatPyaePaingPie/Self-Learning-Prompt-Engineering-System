@@ -1,8 +1,19 @@
-groq>=0.4.0
-fastapi
-uvicorn
-pydantic
-sqlalchemy
-alembic
-pytest
-python-dotenv
+# FastAPI and server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Security and authentication
+python-jose[cryptography]>=3.3.0
+passlib[argon2]>=1.7.4
+argon2-cffi>=23.1.0
+cryptography>=42.0.0
+python-dotenv>=1.0.0
+
+# Rate limiting
+slowapi>=0.1.9
+
+# Database
+sqlalchemy>=2.0.0
+
+# For security dashboard integration
+pydantic>=2.5.0
