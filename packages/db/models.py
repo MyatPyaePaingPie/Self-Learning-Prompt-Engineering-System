@@ -8,6 +8,7 @@ class Prompt(Base):
     __tablename__ = "prompts"
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[str | None]
+    request_id: Mapped[str | None] = mapped_column(default=None)  # For tracking multi-agent requests
     original_text: Mapped[str]
     created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
 
@@ -53,4 +54,16 @@ class SecurityInput(Base):
     label: Mapped[str]  # "safe", "low-risk", "medium-risk", "high-risk", "blocked"
     is_blocked: Mapped[bool]
     analysis_metadata: Mapped[dict | None] = mapped_column(JSON, default=None)  # Additional analysis details
+    created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+
+class UserFeedback(Base):
+    __tablename__ = "user_feedback"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    request_id: Mapped[str]  # From multi-agent request (UUID string)
+    user_id: Mapped[str]  # User who submitted feedback
+    prompt_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prompts.id", ondelete="CASCADE"))
+    user_choice: Mapped[str]  # "original", "single", "multi"
+    judge_winner: Mapped[str]  # Agent selected by judge (e.g., "syntax", "structure", "domain")
+    agent_winner: Mapped[str]  # Agent to credit based on user choice (e.g., "none", "template", "syntax")
+    judge_correct: Mapped[bool]  # True if judge_winner == agent_winner
     created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)

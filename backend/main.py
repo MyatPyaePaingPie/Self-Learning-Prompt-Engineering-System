@@ -41,7 +41,7 @@ from packages.db.crud import create_security_input_row, get_security_inputs
 from pydantic import BaseModel
 
 # Import for temporal analysis (Week 12)
-from packages.db.models import PromptVersion, JudgeScore
+from packages.db.models import Prompt, PromptVersion, JudgeScore
 from temporal_analysis import (
     detect_trend, detect_change_points, compute_statistics, 
     compute_causal_hints, compute_score_velocity
@@ -268,6 +268,33 @@ async def enhance_prompt(
             detail="Prompt enhancement failed"
         )
 
+@app.get("/api/prompts")
+async def get_user_prompts(
+    current_user: User = Depends(get_current_user),
+    limit: int = 50
+):
+    """Get authenticated user's prompts."""
+    try:
+        with get_session() as session:
+            prompts = session.query(Prompt).filter(
+                Prompt.user_id == str(current_user.id)
+            ).order_by(Prompt.created_at.desc()).limit(limit).all()
+            
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "id": str(p.id),
+                        "original_text": p.original_text,
+                        "created_at": p.created_at.isoformat(),
+                        "user_id": p.user_id
+                    }
+                    for p in prompts
+                ]
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/prompts/save")
 @limiter.limit("20/minute")
 async def save_prompt(
@@ -358,6 +385,49 @@ async def multi_agent_enhance(
         coordinator = get_multi_agent_coordinator()
         decision = await coordinator.coordinate(prompt_data.text)
         
+        # Generate request ID for tracking (BEFORE database save)
+        request_id = str(uuid.uuid4())
+        
+        # SAVE PROMPT TO DATABASE WITH USER_ID AND REQUEST_ID
+        from packages.db.crud import create_prompt_row, create_version_row, create_judge_score_row
+        from packages.core.judge import Scorecard
+        
+        with get_session() as session:
+            # Create prompt record with user_id and request_id
+            prompt = create_prompt_row(
+                session=session,
+                user_id=str(current_user.id),  # USER-SPECIFIC
+                original_text=prompt_data.text,
+                request_id=request_id  # For feedback linkage
+            )
+            
+            # Create version for original prompt
+            original_version = create_version_row(
+                session=session,
+                prompt_id=prompt.id,
+                version_no=1,
+                text=prompt_data.text,
+                explanation={"source": "user_input", "enhancement_type": prompt_data.enhancement_type},
+                source="user_input"
+            )
+            
+            # Create version for enhanced prompt
+            enhanced_version = create_version_row(
+                session=session,
+                prompt_id=prompt.id,
+                version_no=2,
+                text=decision.final_prompt,
+                explanation={
+                    "source": "multi_agent",
+                    "selected_agent": decision.selected_agent,
+                    "decision_rationale": decision.decision_rationale
+                },
+                source="multi_agent"
+            )
+            
+            session.commit()
+            prompt_id = str(prompt.id)
+        
         # Add model info to response
         agent_results_with_models = []
         for result in decision.agent_results:
@@ -374,18 +444,15 @@ async def multi_agent_enhance(
                 }
             agent_results_with_models.append(result_dict)
         
-        # Generate request ID for tracking
-        request_id = str(uuid.uuid4())
-        
         # Database-First Pattern (2025-12-04):
-        # REMOVED: Direct CSV writes to prevent data drift
-        # All data stored in PostgreSQL (single source of truth)
+        # Prompts now saved to PostgreSQL with user_id
         # CSV export is manual via POST /api/storage/export-multi-agent
         
         return {
             "success": True,
             "data": {
                 "request_id": request_id,
+                "prompt_id": prompt_id,  # NEW: Database ID
                 "original_text": prompt_data.text,
                 "enhanced_text": decision.final_prompt,
                 "selected_agent": decision.selected_agent,
@@ -871,6 +938,15 @@ async def get_temporal_timeline(
         
         # Query database for versions in time range
         with get_session() as session:
+            # SECURITY: Verify prompt belongs to current user
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(prompt_id),
+                Prompt.user_id == str(current_user.id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+            
             versions = session.query(PromptVersion).filter(
                 PromptVersion.prompt_id == uuid.UUID(prompt_id),
                 PromptVersion.created_at >= start_date,
@@ -927,13 +1003,22 @@ async def get_temporal_statistics(
     """
     try:
         with get_session() as session:
+            # SECURITY: Verify prompt belongs to current user
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(prompt_id),
+                Prompt.user_id == str(current_user.id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+            
             # Query all versions for this prompt
             versions = session.query(PromptVersion).filter(
                 PromptVersion.prompt_id == uuid.UUID(prompt_id)
             ).order_by(PromptVersion.created_at).all()
             
             if not versions:
-                raise HTTPException(status_code=404, detail="Prompt not found")
+                raise HTTPException(status_code=404, detail="No versions found for this prompt")
             
             # Get scores and timestamps
             scores = []
@@ -990,13 +1075,22 @@ async def get_causal_hints(
     """
     try:
         with get_session() as session:
+            # SECURITY: Verify prompt belongs to current user
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(prompt_id),
+                Prompt.user_id == str(current_user.id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+            
             # Query all versions for this prompt
             versions = session.query(PromptVersion).filter(
                 PromptVersion.prompt_id == uuid.UUID(prompt_id)
             ).order_by(PromptVersion.created_at).all()
             
             if not versions:
-                raise HTTPException(status_code=404, detail="Prompt not found")
+                raise HTTPException(status_code=404, detail="No versions found for this prompt")
             
             # Build edges (parent -> child transitions)
             edges = []
@@ -1054,14 +1148,14 @@ async def generate_synthetic_history(
     """
     try:
         with get_session() as session:
-            # Verify prompt exists
-            from packages.db.models import Prompt
+            # SECURITY: Verify prompt exists and belongs to current user
             prompt = session.query(Prompt).filter(
-                Prompt.id == uuid.UUID(request.prompt_id)
+                Prompt.id == uuid.UUID(request.prompt_id),
+                Prompt.user_id == str(current_user.id)
             ).first()
             
             if not prompt:
-                raise HTTPException(status_code=404, detail="Prompt not found")
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
             
             # Generate synthetic versions
             total_versions = request.days * request.versions_per_day

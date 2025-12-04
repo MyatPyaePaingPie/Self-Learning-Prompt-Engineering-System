@@ -1,15 +1,21 @@
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
-from .models import Prompt, PromptVersion, JudgeScore, BestHead, SecurityInput
+from .models import Prompt, PromptVersion, JudgeScore, BestHead, SecurityInput, UserFeedback
 from packages.core.judge import Scorecard
 import uuid
 
-def create_prompt_row(session: Session, user_id: str | None, original_text: str) -> Prompt:
+def create_prompt_row(session: Session, user_id: str | None, original_text: str, request_id: str | None = None) -> Prompt:
     """Create a new prompt record"""
-    prompt = Prompt(user_id=user_id, original_text=original_text)
+    prompt = Prompt(user_id=user_id, original_text=original_text, request_id=request_id)
     session.add(prompt)
     session.flush()  # Get the ID without committing
     return prompt
+
+def get_prompt_by_request_id(session: Session, request_id: str) -> Prompt | None:
+    """Get prompt by request_id"""
+    return session.execute(
+        sa.select(Prompt).where(Prompt.request_id == request_id)
+    ).scalar_one_or_none()
 
 def create_version_row(session: Session, prompt_id: uuid.UUID, version_no: int, 
                       text: str, explanation: dict, source: str) -> PromptVersion:
@@ -354,3 +360,81 @@ def get_change_type_correlations(session: Session, prompt_id: uuid.UUID) -> dict
         change_type: (sum(deltas) / len(deltas) if deltas else 0.0)
         for change_type, deltas in correlations.items()
     }
+
+# ============================================================================
+# USER FEEDBACK CRUD (Added 2025-12-04)
+# ============================================================================
+
+def create_feedback_row(
+    session: Session,
+    request_id: str,
+    user_id: str,
+    prompt_id: uuid.UUID,
+    user_choice: str,
+    judge_winner: str,
+    agent_winner: str
+) -> UserFeedback:
+    """Create a new user feedback record"""
+    feedback = UserFeedback(
+        request_id=request_id,
+        user_id=user_id,
+        prompt_id=prompt_id,
+        user_choice=user_choice,
+        judge_winner=judge_winner,
+        agent_winner=agent_winner,
+        judge_correct=(judge_winner == agent_winner)
+    )
+    session.add(feedback)
+    session.flush()  # Get the ID without committing
+    return feedback
+
+def get_feedback_by_request_id(session: Session, request_id: str) -> UserFeedback | None:
+    """Get feedback by request_id"""
+    return session.execute(
+        sa.select(UserFeedback).where(UserFeedback.request_id == request_id)
+    ).scalar_one_or_none()
+
+def get_feedback_by_user(session: Session, user_id: str, limit: int = 100) -> list[UserFeedback]:
+    """Get all feedback for a specific user"""
+    return session.execute(
+        sa.select(UserFeedback)
+        .where(UserFeedback.user_id == user_id)
+        .order_by(UserFeedback.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
+
+def get_agent_effectiveness_from_feedback(session: Session, user_id: str | None = None) -> dict:
+    """
+    Calculate agent effectiveness from user feedback.
+    
+    Returns dict with agent names as keys and effectiveness metrics as values.
+    """
+    query = sa.select(UserFeedback)
+    if user_id:
+        query = query.where(UserFeedback.user_id == user_id)
+    
+    feedback_records = session.execute(query).scalars().all()
+    
+    if not feedback_records:
+        return {}
+    
+    # Count wins per agent
+    agent_wins = {}
+    total_feedback = len(feedback_records)
+    
+    for feedback in feedback_records:
+        agent = feedback.agent_winner
+        if agent not in agent_wins:
+            agent_wins[agent] = 0
+        agent_wins[agent] += 1
+    
+    # Calculate effectiveness (win rate)
+    effectiveness = {}
+    for agent, wins in agent_wins.items():
+        effectiveness[agent] = {
+            "wins": wins,
+            "total": total_feedback,
+            "effectiveness": wins / total_feedback if total_feedback > 0 else 0.0
+        }
+    
+    return effectiveness

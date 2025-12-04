@@ -295,12 +295,39 @@ def show_prompt_enhancement():
             submit_enhance = st.form_submit_button("✨ Enhance & Compare", type="primary")
     
     if submit_enhance and prompt_text:
+        # Clear previous results when submitting new prompt
+        if 'comparison_results' in st.session_state:
+            del st.session_state['comparison_results']
+        
         if "Compare All" in enhancement_mode:
             show_three_way_comparison(prompt_text, context)
         elif "Single-Agent" in enhancement_mode:
             show_single_agent_only(prompt_text, context)
         else:
             show_multi_agent_only(prompt_text)
+    
+    # Display previous results if they exist (persists across feedback button clicks)
+    elif 'comparison_results' in st.session_state:
+        results = st.session_state['comparison_results']
+        display_three_way_results(
+            results['request_id'],
+            results['original_prompt'],
+            results['single_enhanced'],
+            results['multi_enhanced'],
+            results['original_output'],
+            results['single_output'],
+            results['multi_output'],
+            results['original_score'],
+            results['single_score'],
+            results['multi_score'],
+            results['original_usage'],
+            results['single_usage'],
+            results['multi_usage'],
+            results['original_judge_usage'],
+            results['single_judge_usage'],
+            results['multi_judge_usage'],
+            results['multi_metadata']
+        )
     elif submit_enhance:
         st.error("❌ Please enter a prompt to enhance")
 
@@ -387,6 +414,27 @@ def show_three_way_comparison(original_prompt: str, context: str = ""):
             original_judge_usage = tracker.track_llm_call("judge", "result", "mock")
             single_judge_usage = tracker.track_llm_call("judge", "result", "mock")
             multi_judge_usage = tracker.track_llm_call("judge", "result", "mock")
+    
+    # Store results in session state so they persist across button clicks
+    st.session_state['comparison_results'] = {
+        'request_id': request_id,
+        'original_prompt': original_prompt,
+        'single_enhanced': single_enhanced,
+        'multi_enhanced': multi_enhanced,
+        'original_output': original_output,
+        'single_output': single_output,
+        'multi_output': multi_output,
+        'original_score': original_score,
+        'single_score': single_score,
+        'multi_score': multi_score,
+        'original_usage': original_usage,
+        'single_usage': single_usage,
+        'multi_usage': multi_usage,
+        'original_judge_usage': original_judge_usage,
+        'single_judge_usage': single_judge_usage,
+        'multi_judge_usage': multi_judge_usage,
+        'multi_metadata': multi_metadata
+    }
     
     # Display results
     display_three_way_results(
@@ -592,20 +640,22 @@ def display_three_way_results(
             if st.button("👍 Original was best", key=f"vote_orig_{request_id}", type="secondary"):
                 submit_feedback(request_id, "original", judge_winner, "none")
                 st.session_state[feedback_key] = True
-                st.rerun()
+                # No page refresh - feedback submitted silently
         
         with col2:
             if st.button("👍 Single-Agent was best", key=f"vote_single_{request_id}", type="secondary"):
                 submit_feedback(request_id, "single", judge_winner, "template")
                 st.session_state[feedback_key] = True
-                st.rerun()
+                # No page refresh - feedback submitted silently
         
         with col3:
             if st.button("👍 Multi-Agent was best", key=f"vote_multi_{request_id}", type="primary"):
                 submit_feedback(request_id, "multi", judge_winner, judge_winner)
                 st.session_state[feedback_key] = True
-                st.rerun()
-    else:
+                # No page refresh - feedback submitted silently
+    
+    # Show confirmation immediately after any button click
+    if st.session_state[feedback_key]:
         st.success("✅ Thank you! Your feedback has been recorded and will help the system learn.")
     
     # ROI Analysis
@@ -1046,192 +1096,204 @@ def show_temporal_analysis():
     # Initialize temporal client with auth token
     temporal_client = init_temporal_client(token=st.session_state.access_token)
     
-    # Get list of prompts for selection (using database)
-    from packages.db.session import get_session
-    from packages.db.models import Prompt
+    # Backend API URL
+    API_BASE = "http://localhost:8001"
     
+    # Get list of user's prompts from API (user-specific)
     try:
-        with get_session() as session:
-            prompts = session.query(Prompt).order_by(Prompt.created_at.desc()).limit(50).all()
-            
-            if not prompts:
-                st.warning("⚠️ No prompts found. Create a prompt first using the Dashboard Prompt Enhancement.")
-                if st.button("← Go to Dashboard"):
-                    st.session_state.current_page = "dashboard"
-                    st.rerun()
-                return
-            
-            # Prompt selector
-            prompt_options = {f"{p.original_text[:60]}... ({p.created_at.strftime('%Y-%m-%d')})": str(p.id) for p in prompts}
-            selected_prompt_label = st.selectbox("Select Prompt:", list(prompt_options.keys()))
-            selected_prompt_id = prompt_options[selected_prompt_label]
-            
-            # Synthetic data generator button
-            col1, col2, col3 = st.columns([2, 1, 1])
-            with col1:
-                if st.button("🧪 Generate 30-Day Test Data", type="primary"):
-                    with st.spinner("Generating synthetic history..."):
-                        result = temporal_client.generate_synthetic(selected_prompt_id, days=30, versions_per_day=2)
-                    
-                    if result["success"]:
-                        st.success(f"✅ Generated {result['data']['created_versions']} versions!")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Error: {result['error']}")
-            
-            # Tabs for different visualizations
-            tab1, tab2, tab3 = st.tabs(["📈 Timeline", "📊 Statistics", "🔗 Causal Hints"])
-            
-            # Tab 1: Timeline Visualization
-            with tab1:
-                st.subheader("Prompt Evolution Timeline")
+        response = requests.get(
+            f"{API_BASE}/api/prompts?limit=50",
+            headers={"Authorization": f"Bearer {st.session_state.access_token}"}
+        )
+        
+        if response.status_code != 200:
+            st.error(f"Failed to load prompts: {response.status_code}")
+            return
+        
+        prompts_data = response.json()
+        if not prompts_data.get("success") or not prompts_data.get("data"):
+            st.warning("⚠️ No prompts found. Create a prompt first using the Dashboard Prompt Enhancement.")
+            if st.button("← Go to Dashboard"):
+                st.session_state.current_page = "dashboard"
+                st.rerun()
+            return
+        
+        prompts = prompts_data["data"]
+        
+        # Prompt selector
+        prompt_options = {
+            f"{p['original_text'][:60]}... ({p['created_at'][:10]})": p['id'] 
+            for p in prompts
+        }
+        selected_prompt_label = st.selectbox("Select Prompt:", list(prompt_options.keys()))
+        selected_prompt_id = prompt_options[selected_prompt_label]
+        
+        # Synthetic data generator button
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            if st.button("🧪 Generate 30-Day Test Data", type="primary"):
+                with st.spinner("Generating synthetic history..."):
+                    result = temporal_client.generate_synthetic(selected_prompt_id, days=30, versions_per_day=2)
                 
-                # Date range selector
+                if result["success"]:
+                    st.success(f"✅ Generated {result['data']['created_versions']} versions!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Error: {result['error']}")
+        
+        # Tabs for different visualizations
+        tab1, tab2, tab3 = st.tabs(["📈 Timeline", "📊 Statistics", "🔗 Causal Hints"])
+        
+        # Tab 1: Timeline Visualization
+        with tab1:
+            st.subheader("Prompt Evolution Timeline")
+            
+            # Date range selector
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input(
+                    "Start Date",
+                    value=(datetime.now() - timedelta(days=30)).date()
+                )
+            with col2:
+                end_date = st.date_input(
+                    "End Date",
+                    value=datetime.now().date()
+                )
+            
+            # Get timeline data
+            timeline_result = temporal_client.get_timeline(
+                selected_prompt_id,
+                start_date.isoformat(),
+                end_date.isoformat()
+            )
+            
+            if timeline_result["success"]:
+                timeline_data = timeline_result["data"]
+                
+                if not timeline_data:
+                    st.info("💡 No temporal data found for this prompt. Generate synthetic data to see visualizations.")
+                else:
+                    # Convert to DataFrame
+                    df = pd.DataFrame(timeline_data)
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    
+                    # Create interactive line chart with plotly
+                    fig = px.line(
+                        df,
+                        x='timestamp',
+                        y='score',
+                        color='change_type',
+                        title='Judge Score Over Time',
+                        labels={'score': 'Judge Score (0-100)', 'timestamp': 'Date', 'change_type': 'Change Type'},
+                        markers=True
+                    )
+                    
+                    fig.update_layout(
+                        hovermode='x unified',
+                        xaxis_title="Date",
+                        yaxis_title="Judge Score",
+                        legend_title="Change Type"
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Data table
+                    with st.expander("📋 View Raw Data"):
+                        st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.error(f"❌ Error loading timeline: {timeline_result['error']}")
+        
+        # Tab 2: Statistics
+        with tab2:
+            st.subheader("Temporal Statistics")
+            
+            stats_result = temporal_client.get_statistics(selected_prompt_id)
+            
+            if stats_result["success"]:
+                stats = stats_result["data"]
+                
+                # Metric cards
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    trend_icons = {"improving": "🟢", "degrading": "🔴", "stable": "🟡"}
+                    trend_icon = trend_icons.get(stats['trend'], "⚪")
+                    st.metric("Trend", f"{trend_icon} {stats['trend'].title()}")
+                
+                with col2:
+                    st.metric("Average Score", f"{stats['avg_score']:.1f}")
+                
+                with col3:
+                    st.metric("Score Std Dev", f"{stats['score_std']:.1f}")
+                
+                with col4:
+                    st.metric("Total Versions", stats['total_versions'])
+                
+                st.markdown("---")
+                
+                # Additional statistics
                 col1, col2 = st.columns(2)
                 with col1:
-                    start_date = st.date_input(
-                        "Start Date",
-                        value=(datetime.now() - timedelta(days=30)).date()
-                    )
+                    st.metric("Min Score", f"{stats.get('min_score', 0):.1f}")
                 with col2:
-                    end_date = st.date_input(
-                        "End Date",
-                        value=datetime.now().date()
-                    )
+                    st.metric("Max Score", f"{stats.get('max_score', 0):.1f}")
                 
-                # Get timeline data
-                timeline_result = temporal_client.get_timeline(
-                    selected_prompt_id,
-                    start_date.isoformat(),
-                    end_date.isoformat()
-                )
+                # Trend interpretation
+                if stats['trend'] == 'improving':
+                    st.success("📈 **Interpretation:** This prompt is improving over time! Continue current optimization strategy.")
+                elif stats['trend'] == 'degrading':
+                    st.warning("📉 **Interpretation:** This prompt is degrading over time. Consider reverting recent changes or trying a different approach.")
+                else:
+                    st.info("➡️ **Interpretation:** This prompt has stable performance. Try more significant changes to improve scores.")
+            else:
+                st.error(f"❌ Error loading statistics: {stats_result['error']}")
+        
+        # Tab 3: Causal Hints
+        with tab3:
+            st.subheader("Causal Hints: Change Types vs Score Deltas")
+            st.markdown("Correlation analysis between change types and score improvements")
+            
+            hints_result = temporal_client.get_causal_hints(selected_prompt_id)
+            
+            if hints_result["success"]:
+                hints = hints_result["data"]
                 
-                if timeline_result["success"]:
-                    timeline_data = timeline_result["data"]
+                if not hints:
+                    st.info("💡 No causal data found. Generate synthetic data to see correlations.")
+                else:
+                    # Display as DataFrame
+                    df_hints = pd.DataFrame(hints)
+                    df_hints = df_hints.sort_values('avg_score_delta', ascending=False)
                     
-                    if not timeline_data:
-                        st.info("💡 No temporal data found for this prompt. Generate synthetic data to see visualizations.")
-                    else:
-                        # Convert to DataFrame
-                        df = pd.DataFrame(timeline_data)
-                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    st.dataframe(df_hints, use_container_width=True, hide_index=True)
+                    
+                    # Interpretation
+                    if not df_hints.empty:
+                        best_type = df_hints.iloc[0]['change_type']
+                        best_delta = df_hints.iloc[0]['avg_score_delta']
+                        worst_type = df_hints.iloc[-1]['change_type']
+                        worst_delta = df_hints.iloc[-1]['avg_score_delta']
                         
-                        # Create interactive line chart with plotly
-                        fig = px.line(
-                            df,
-                            x='timestamp',
-                            y='score',
-                            color='change_type',
-                            title='Judge Score Over Time',
-                            labels={'score': 'Judge Score (0-100)', 'timestamp': 'Date', 'change_type': 'Change Type'},
-                            markers=True
-                        )
+                        st.success(f"💡 **Best Strategy:** '{best_type}' changes tend to increase scores by **{best_delta:.1f} points** on average")
                         
-                        fig.update_layout(
-                            hovermode='x unified',
-                            xaxis_title="Date",
-                            yaxis_title="Judge Score",
-                            legend_title="Change Type"
+                        if worst_delta < 0:
+                            st.warning(f"⚠️ **Avoid:** '{worst_type}' changes tend to decrease scores by **{abs(worst_delta):.1f} points** on average")
+                        
+                        # Visualization
+                        fig = px.bar(
+                            df_hints,
+                            x='change_type',
+                            y='avg_score_delta',
+                            color='avg_score_delta',
+                            title='Average Score Delta by Change Type',
+                            labels={'avg_score_delta': 'Avg Score Delta', 'change_type': 'Change Type'},
+                            color_continuous_scale='RdYlGn'
                         )
                         
                         st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Data table
-                        with st.expander("📋 View Raw Data"):
-                            st.dataframe(df, use_container_width=True, hide_index=True)
-                else:
-                    st.error(f"❌ Error loading timeline: {timeline_result['error']}")
-            
-            # Tab 2: Statistics
-            with tab2:
-                st.subheader("Temporal Statistics")
-                
-                stats_result = temporal_client.get_statistics(selected_prompt_id)
-                
-                if stats_result["success"]:
-                    stats = stats_result["data"]
-                    
-                    # Metric cards
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        trend_icons = {"improving": "🟢", "degrading": "🔴", "stable": "🟡"}
-                        trend_icon = trend_icons.get(stats['trend'], "⚪")
-                        st.metric("Trend", f"{trend_icon} {stats['trend'].title()}")
-                    
-                    with col2:
-                        st.metric("Average Score", f"{stats['avg_score']:.1f}")
-                    
-                    with col3:
-                        st.metric("Score Std Dev", f"{stats['score_std']:.1f}")
-                    
-                    with col4:
-                        st.metric("Total Versions", stats['total_versions'])
-                    
-                    st.markdown("---")
-                    
-                    # Additional statistics
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Min Score", f"{stats.get('min_score', 0):.1f}")
-                    with col2:
-                        st.metric("Max Score", f"{stats.get('max_score', 0):.1f}")
-                    
-                    # Trend interpretation
-                    if stats['trend'] == 'improving':
-                        st.success("📈 **Interpretation:** This prompt is improving over time! Continue current optimization strategy.")
-                    elif stats['trend'] == 'degrading':
-                        st.warning("📉 **Interpretation:** This prompt is degrading over time. Consider reverting recent changes or trying a different approach.")
-                    else:
-                        st.info("➡️ **Interpretation:** This prompt has stable performance. Try more significant changes to improve scores.")
-                else:
-                    st.error(f"❌ Error loading statistics: {stats_result['error']}")
-            
-            # Tab 3: Causal Hints
-            with tab3:
-                st.subheader("Causal Hints: Change Types vs Score Deltas")
-                st.markdown("Correlation analysis between change types and score improvements")
-                
-                hints_result = temporal_client.get_causal_hints(selected_prompt_id)
-                
-                if hints_result["success"]:
-                    hints = hints_result["data"]
-                    
-                    if not hints:
-                        st.info("💡 No causal data found. Generate synthetic data to see correlations.")
-                    else:
-                        # Display as DataFrame
-                        df_hints = pd.DataFrame(hints)
-                        df_hints = df_hints.sort_values('avg_score_delta', ascending=False)
-                        
-                        st.dataframe(df_hints, use_container_width=True, hide_index=True)
-                        
-                        # Interpretation
-                        if not df_hints.empty:
-                            best_type = df_hints.iloc[0]['change_type']
-                            best_delta = df_hints.iloc[0]['avg_score_delta']
-                            worst_type = df_hints.iloc[-1]['change_type']
-                            worst_delta = df_hints.iloc[-1]['avg_score_delta']
-                            
-                            st.success(f"💡 **Best Strategy:** '{best_type}' changes tend to increase scores by **{best_delta:.1f} points** on average")
-                            
-                            if worst_delta < 0:
-                                st.warning(f"⚠️ **Avoid:** '{worst_type}' changes tend to decrease scores by **{abs(worst_delta):.1f} points** on average")
-                            
-                            # Visualization
-                            fig = px.bar(
-                                df_hints,
-                                x='change_type',
-                                y='avg_score_delta',
-                                color='avg_score_delta',
-                                title='Average Score Delta by Change Type',
-                                labels={'avg_score_delta': 'Avg Score Delta', 'change_type': 'Change Type'},
-                                color_continuous_scale='RdYlGn'
-                            )
-                            
-                            st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.error(f"❌ Error loading causal hints: {hints_result['error']}")
+            else:
+                st.error(f"❌ Error loading causal hints: {hints_result['error']}")
     
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
@@ -1458,13 +1520,20 @@ def show_token_analytics():
         try:
             temporal_client = init_temporal_client(token=st.session_state.access_token)
             
-            with get_session() as session:
-                # Get recent prompts
-                prompts = session.query(Prompt).order_by(Prompt.created_at.desc()).limit(10).all()
-                
-                if prompts:
+            # Get user's prompts from API
+            API_BASE = "http://localhost:8001"
+            response = requests.get(
+                f"{API_BASE}/api/prompts?limit=10",
+                headers={"Authorization": f"Bearer {st.session_state.access_token}"}
+            )
+            
+            if response.status_code == 200:
+                prompts_data = response.json()
+                if prompts_data.get("success") and prompts_data.get("data"):
+                    prompts = prompts_data["data"]
+                    
                     # Prompt selector
-                    prompt_options = {f"{p.original_text[:50]}...": str(p.id) for p in prompts}
+                    prompt_options = {f"{p['original_text'][:50]}...": p['id'] for p in prompts}
                     selected_label = st.selectbox("Select prompt for trend analysis:", list(prompt_options.keys()), key="token_temporal_prompt")
                     selected_id = prompt_options[selected_label]
                     
@@ -1863,13 +1932,17 @@ def show_agent_effectiveness():
         try:
             temporal_client = init_temporal_client(token=st.session_state.access_token)
             
-            with get_session() as session:
-                # Get prompts with agent versions
-                prompts_with_agents = session.query(Prompt).join(PromptVersion).filter(
-                    PromptVersion.source.in_(['syntax', 'structure', 'domain'])
-                ).distinct().order_by(Prompt.created_at.desc()).limit(10).all()
-                
-                if prompts_with_agents:
+            # Get user's prompts from API (for agent effectiveness)
+            API_BASE = "http://localhost:8001"
+            response = requests.get(
+                f"{API_BASE}/api/prompts?limit=10",
+                headers={"Authorization": f"Bearer {st.session_state.access_token}"}
+            )
+            
+            if response.status_code == 200:
+                prompts_data = response.json()
+                if prompts_data.get("success") and prompts_data.get("data"):
+                    prompts_with_agents = prompts_data["data"]
                     st.info("💡 View temporal trends for each agent type to identify which strategies improve over time")
                     
                     # Get agent-specific trends
