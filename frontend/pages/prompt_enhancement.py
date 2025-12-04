@@ -8,13 +8,6 @@ from utils.api_client import API_BASE
 
 def show_prompt_enhancement():
     """Show the prompt enhancement interface."""
-    st.title("🤖 Prompt Enhancement & Comparison")
-    st.markdown("**The system will:**")
-    st.markdown("1. ✨ Enhance your prompt using different methods")
-    st.markdown("2. 🚀 **Execute all prompts** (original + enhanced versions) with an LLM")
-    st.markdown("3. 📊 Compare the actual outputs side-by-side")
-    st.markdown("4. 🏆 Declare a winner based on quality scores")
-    
     # Enhancement mode selector - Default to Compare All to showcase multi-agent value
     enhancement_mode = st.radio(
         "Enhancement Method:",

@@ -65,6 +65,15 @@ def main():
 
 def show_navigation_sidebar():
     """Sidebar navigation"""
+    # Hide Streamlit's automatic page navigation
+    st.markdown("""
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # Header
     show_page_header()
     
