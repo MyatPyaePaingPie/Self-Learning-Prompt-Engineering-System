@@ -14,7 +14,8 @@ if str(backend_dir) not in sys.path:
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from auth import get_current_user, User
+from backend.routers.auth import get_current_user
+from database import User
 from packages.db.session import get_session
 from packages.db.crud import get_all_prompt_versions
 from storage.file_storage import FileStorage

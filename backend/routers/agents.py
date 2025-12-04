@@ -10,7 +10,8 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from auth import get_current_user, User
+from backend.routers.auth import get_current_user
+from database import User
 from packages.db.session import get_session
 from packages.db.crud import get_agent_effectiveness_stats
 
