@@ -40,6 +40,16 @@ from packages.db.session import get_session
 from packages.db.crud import create_security_input_row, get_security_inputs
 from pydantic import BaseModel
 
+# Import for temporal analysis (Week 12)
+from packages.db.models import PromptVersion, JudgeScore
+from temporal_analysis import (
+    detect_trend, detect_change_points, compute_statistics, 
+    compute_causal_hints, compute_score_velocity
+)
+import uuid
+import random
+import difflib
+
 app = FastAPI(
     title="Secure Authentication API",
     version="1.0.0",
@@ -212,6 +222,13 @@ class PromptEnhanceRequest(BaseModel):
     enhancement_type: str = Field(default="general", pattern="^(general|creative|technical|persuasive|clear)$")
     context: Optional[str] = Field(None, max_length=1000)
 
+class FeedbackRequest(BaseModel):
+    """Request model for user feedback on multi-agent results (Darwinian Evolution - Phase 1)"""
+    request_id: str = Field(..., min_length=1, max_length=100, description="Unique request ID")
+    user_choice: str = Field(..., pattern="^(original|single|multi)$", description="User's choice")
+    judge_winner: str = Field(..., description="Agent selected by judge")
+    agent_winner: str = Field(..., description="Agent to credit based on user choice")
+
 @app.post("/prompts/enhance")
 @limiter.limit("10/minute")
 async def enhance_prompt(
@@ -360,18 +377,10 @@ async def multi_agent_enhance(
         # Generate request ID for tracking
         request_id = str(uuid.uuid4())
         
-        # Log to storage (Phase 2 - L:IV atomicity, don't block on failure)
-        try:
-            file_storage = get_file_storage()
-            file_storage.save_multi_agent_result(
-                request_id=request_id,
-                original_prompt=prompt_data.text,
-                agent_results=[r.dict() for r in decision.agent_results],
-                decision=decision.dict()
-            )
-        except Exception as storage_error:
-            # Don't fail request if logging fails (L:IV atomicity)
-            logger.error(f"Failed to log multi-agent result: {storage_error}")
+        # Database-First Pattern (2025-12-04):
+        # REMOVED: Direct CSV writes to prevent data drift
+        # All data stored in PostgreSQL (single source of truth)
+        # CSV export is manual via POST /api/storage/export-multi-agent
         
         return {
             "success": True,
@@ -383,6 +392,9 @@ async def multi_agent_enhance(
                 "decision_rationale": decision.decision_rationale,
                 "agent_results": agent_results_with_models,
                 "vote_breakdown": decision.vote_breakdown,
+                "token_usage": decision.token_usage,  # Per-agent token usage
+                "total_cost_usd": decision.total_cost_usd,  # Total cost across all agents
+                "total_tokens": decision.total_tokens,  # Total tokens across all agents
                 "created_at": datetime.utcnow().isoformat(),
                 "user_id": current_user.id
             }
@@ -392,6 +404,69 @@ async def multi_agent_enhance(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Multi-agent enhancement failed: {str(e)}"
+        )
+
+@app.post("/prompts/feedback")
+@limiter.limit("20/minute")  # Higher limit for feedback (lightweight operation)
+async def record_user_feedback(
+    request: Request,
+    feedback: FeedbackRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Record user feedback on multi-agent results (Darwinian Evolution - Phase 1).
+    
+    This endpoint enables the system to learn from user preferences by tracking
+    which enhancement method (original, single-agent, or multi-agent) the user
+    found most effective. This data is used to:
+    - Calculate agent effectiveness over time
+    - Adjust agent weights in future decisions (Phase 2)
+    - Improve system performance through evolutionary learning
+    """
+    try:
+        # Get file storage
+        storage = get_file_storage()
+        
+        # Validate inputs
+        if feedback.user_choice not in ["original", "single", "multi"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid user_choice. Must be 'original', 'single', or 'multi'"
+            )
+        
+        # Record feedback in CSV
+        success = storage.record_feedback(
+            request_id=feedback.request_id,
+            user_choice=feedback.user_choice,
+            judge_winner=feedback.judge_winner,
+            agent_winner=feedback.agent_winner
+        )
+        
+        if not success:
+            # Check if request_id exists
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Request ID not found: {feedback.request_id}"
+            )
+        
+        return {
+            "success": True,
+            "message": "Feedback recorded successfully",
+            "data": {
+                "request_id": feedback.request_id,
+                "user_choice": feedback.user_choice,
+                "agent_winner": feedback.agent_winner,
+                "judge_correct": feedback.judge_winner == feedback.agent_winner
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to record feedback: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to record feedback: {str(e)}"
         )
 
 @app.get("/prompts/available-agents")
@@ -761,6 +836,446 @@ async def get_security_inputs_endpoint(
             ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# TEMPORAL ANALYSIS ENDPOINTS (Week 12)
+# ============================================================================
+
+class SyntheticDataRequest(BaseModel):
+    prompt_id: str
+    days: int = 30
+    versions_per_day: int = 2
+
+@app.get("/api/temporal/timeline")
+async def get_temporal_timeline(
+    prompt_id: str,
+    start: str,
+    end: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get temporal timeline of prompt versions with scores.
+    
+    Args:
+        prompt_id: UUID of the prompt
+        start: Start date (ISO 8601 format)
+        end: End date (ISO 8601 format)
+        
+    Returns:
+        List of tuples: [(timestamp, score, version_id, change_type), ...]
+    """
+    try:
+        # Parse dates
+        start_date = datetime.fromisoformat(start.replace('Z', '+00:00'))
+        end_date = datetime.fromisoformat(end.replace('Z', '+00:00'))
+        
+        # Query database for versions in time range
+        with get_session() as session:
+            versions = session.query(PromptVersion).filter(
+                PromptVersion.prompt_id == uuid.UUID(prompt_id),
+                PromptVersion.created_at >= start_date,
+                PromptVersion.created_at <= end_date
+            ).order_by(PromptVersion.created_at).all()
+            
+            if not versions:
+                return []
+            
+            # Get judge scores for each version
+            timeline = []
+            for version in versions:
+                judge_score = session.query(JudgeScore).filter(
+                    JudgeScore.prompt_version_id == version.id
+                ).first()
+                
+                if judge_score:
+                    # Calculate average score
+                    avg_score = (
+                        judge_score.clarity + 
+                        judge_score.specificity + 
+                        judge_score.actionability + 
+                        judge_score.structure + 
+                        judge_score.context_use
+                    ) / 5.0
+                    
+                    timeline.append({
+                        "timestamp": version.created_at.isoformat(),
+                        "score": avg_score,
+                        "version_id": str(version.id),
+                        "change_type": version.change_type
+                    })
+            
+            return timeline
+            
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/temporal/statistics")
+async def get_temporal_statistics(
+    prompt_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get temporal statistics for prompt evolution.
+    
+    Args:
+        prompt_id: UUID of the prompt
+        
+    Returns:
+        Dict with trend, avg_score, score_std, total_versions
+    """
+    try:
+        with get_session() as session:
+            # Query all versions for this prompt
+            versions = session.query(PromptVersion).filter(
+                PromptVersion.prompt_id == uuid.UUID(prompt_id)
+            ).order_by(PromptVersion.created_at).all()
+            
+            if not versions:
+                raise HTTPException(status_code=404, detail="Prompt not found")
+            
+            # Get scores and timestamps
+            scores = []
+            timestamps = []
+            
+            for version in versions:
+                judge_score = session.query(JudgeScore).filter(
+                    JudgeScore.prompt_version_id == version.id
+                ).first()
+                
+                if judge_score:
+                    avg_score = (
+                        judge_score.clarity + 
+                        judge_score.specificity + 
+                        judge_score.actionability + 
+                        judge_score.structure + 
+                        judge_score.context_use
+                    ) / 5.0
+                    
+                    scores.append(avg_score)
+                    timestamps.append(version.created_at)
+            
+            # Compute statistics
+            stats = compute_statistics(scores)
+            trend = detect_trend(scores, timestamps)
+            
+            return {
+                "trend": trend,
+                "avg_score": stats["avg"],
+                "score_std": stats["std"],
+                "total_versions": len(versions),
+                "min_score": stats["min"],
+                "max_score": stats["max"]
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/temporal/causal-hints")
+async def get_causal_hints(
+    prompt_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get causal hints showing correlation between change types and score deltas.
+    
+    Args:
+        prompt_id: UUID of the prompt
+        
+    Returns:
+        List of dicts: [{"change_type": str, "avg_score_delta": float, "occurrence_count": int}, ...]
+    """
+    try:
+        with get_session() as session:
+            # Query all versions for this prompt
+            versions = session.query(PromptVersion).filter(
+                PromptVersion.prompt_id == uuid.UUID(prompt_id)
+            ).order_by(PromptVersion.created_at).all()
+            
+            if not versions:
+                raise HTTPException(status_code=404, detail="Prompt not found")
+            
+            # Build edges (parent -> child transitions)
+            edges = []
+            version_scores = {}
+            
+            # First pass: Get all scores
+            for version in versions:
+                judge_score = session.query(JudgeScore).filter(
+                    JudgeScore.prompt_version_id == version.id
+                ).first()
+                
+                if judge_score:
+                    avg_score = (
+                        judge_score.clarity + 
+                        judge_score.specificity + 
+                        judge_score.actionability + 
+                        judge_score.structure + 
+                        judge_score.context_use
+                    ) / 5.0
+                    version_scores[version.id] = avg_score
+            
+            # Second pass: Build edges
+            for version in versions:
+                if version.parent_version_id and version.parent_version_id in version_scores:
+                    parent_score = version_scores[version.parent_version_id]
+                    child_score = version_scores.get(version.id)
+                    
+                    if child_score is not None:
+                        score_delta = child_score - parent_score
+                        edges.append((version.change_type, score_delta))
+            
+            # Compute causal hints
+            hints = compute_causal_hints(edges)
+            
+            return hints
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/temporal/generate-synthetic")
+async def generate_synthetic_history(
+    request: SyntheticDataRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate synthetic prompt version history for testing.
+    
+    Args:
+        request: SyntheticDataRequest with prompt_id, days, versions_per_day
+        
+    Returns:
+        Dict with created_versions count
+    """
+    try:
+        with get_session() as session:
+            # Verify prompt exists
+            from packages.db.models import Prompt
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(request.prompt_id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found")
+            
+            # Generate synthetic versions
+            total_versions = request.days * request.versions_per_day
+            created_count = 0
+            previous_version_id = None
+            previous_text = prompt.original_text
+            
+            # Start with base score and trend upward
+            base_score = 60.0
+            score_increment = 20.0 / total_versions  # Increase 20 points over time
+            
+            change_types = ["structure", "wording", "length", "other"]
+            
+            for day in range(request.days):
+                for version_num in range(request.versions_per_day):
+                    # Calculate timestamp (spread across days)
+                    hours_offset = day * 24 + (version_num * 24 / request.versions_per_day)
+                    version_date = datetime.utcnow() - timedelta(days=request.days - day, hours=hours_offset)
+                    
+                    # Generate version text (simple modification)
+                    version_text = f"{previous_text} [v{created_count + 1}]"
+                    
+                    # Compute change type and magnitude
+                    change_type = random.choice(change_types)
+                    change_magnitude = random.uniform(0.1, 0.5)
+                    
+                    # Create version
+                    new_version = PromptVersion(
+                        id=uuid.uuid4(),
+                        prompt_id=uuid.UUID(request.prompt_id),
+                        version_no=created_count + 1,
+                        text=version_text,
+                        explanation={"synthetic": True, "generated_at": datetime.utcnow().isoformat()},
+                        source="synthetic_generator",
+                        created_at=version_date,
+                        parent_version_id=previous_version_id,
+                        change_type=change_type,
+                        change_magnitude=change_magnitude
+                    )
+                    session.add(new_version)
+                    
+                    # Create judge score (trending upward with some noise)
+                    current_score = base_score + (created_count * score_increment) + random.uniform(-5, 5)
+                    current_score = max(0, min(100, current_score))  # Clamp to 0-100
+                    
+                    judge_score = JudgeScore(
+                        id=uuid.uuid4(),
+                        prompt_version_id=new_version.id,
+                        clarity=current_score,
+                        specificity=current_score,
+                        actionability=current_score,
+                        structure=current_score,
+                        context_use=current_score,
+                        feedback={"synthetic": True},
+                        created_at=version_date
+                    )
+                    session.add(judge_score)
+                    
+                    previous_version_id = new_version.id
+                    previous_text = version_text
+                    created_count += 1
+            
+            session.commit()
+            
+            return {
+                "created_versions": created_count,
+                "prompt_id": request.prompt_id,
+                "days": request.days,
+                "versions_per_day": request.versions_per_day
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# STORAGE CONSOLIDATION PHASE 3: Export Endpoints
+# Added: 2025-12-04
+# Purpose: Manual CSV export from database (database-first pattern)
+# ============================================================================
+
+@app.post("/api/storage/export-multi-agent")
+@limiter.limit("10/minute")
+async def export_multi_agent_csv(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Export multi-agent results from database to CSV.
+    
+    Database-First Pattern:
+    - Reads from PostgreSQL (single source of truth)
+    - Generates CSV for analysis/backup
+    - Manual export (not automatic)
+    """
+    try:
+        from storage.file_storage import FileStorage
+        import os
+        
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        storage = FileStorage(base_dir=storage_dir, db_session=session)
+        
+        csv_path = storage.export_multi_agent_results_to_csv()
+        
+        # Count records
+        from packages.db.crud import get_all_prompt_versions
+        versions = get_all_prompt_versions(session, limit=1000)
+        by_prompt = {}
+        for v in versions:
+            if v.prompt_id not in by_prompt:
+                by_prompt[v.prompt_id] = []
+        
+        return {
+            "success": True,
+            "csv_path": csv_path,
+            "records": len(by_prompt)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+@app.post("/api/storage/export-temporal")
+@limiter.limit("10/minute")
+async def export_temporal_csv(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Export temporal version chains from database to CSV.
+    
+    Database-First Pattern:
+    - Reads from PostgreSQL (single source of truth)
+    - Generates CSV for analysis/backup
+    - Manual export (not automatic)
+    """
+    try:
+        from storage.file_storage import FileStorage
+        import os
+        
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        storage = FileStorage(base_dir=storage_dir, db_session=session)
+        
+        csv_path = storage.export_temporal_versions_to_csv()
+        
+        # Count records
+        from packages.db.crud import get_all_prompt_versions
+        versions = get_all_prompt_versions(session, limit=1000)
+        
+        return {
+            "success": True,
+            "csv_path": csv_path,
+            "records": len(versions)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+@app.post("/api/storage/export-all")
+@limiter.limit("5/minute")
+async def export_all_csv(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Export all data from database to CSV files.
+    
+    Database-First Pattern:
+    - Exports multi-agent + temporal data
+    - Single endpoint for bulk export
+    """
+    try:
+        from storage.file_storage import FileStorage
+        import os
+        
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        storage = FileStorage(base_dir=storage_dir, db_session=session)
+        
+        paths = storage.export_all_to_csv()
+        
+        return {
+            "success": True,
+            "csv_paths": paths
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+@app.get("/api/agents/effectiveness")
+@limiter.limit("20/minute")
+async def get_agent_effectiveness(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Query agent effectiveness from database (not CSV).
+    
+    Database-First Pattern:
+    - Queries PostgreSQL directly
+    - No CSV reads
+    """
+    try:
+        from packages.db.crud import get_agent_effectiveness_stats
+        
+        effectiveness = get_agent_effectiveness_stats(session)
+        
+        return {
+            "success": True,
+            "effectiveness": effectiveness
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

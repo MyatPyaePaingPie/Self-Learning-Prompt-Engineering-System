@@ -13,7 +13,7 @@ from groq import Groq
 
 from packages.core.model_config import ModelConfig, get_model_for_agent
 from packages.core.agent_registry import register_agent
-from packages.core.token_tracker import TokenTracker
+from packages.core.token_tracker import TokenTracker, TokenUsage
 
 logger = logging.getLogger(__name__)
 tracker = TokenTracker()
@@ -35,11 +35,12 @@ class AgentSuggestions(BaseModel):
 
 
 class AgentResult(BaseModel):
-    """Complete agent result"""
+    """Complete agent result with token tracking"""
     agent_name: str
     analysis: AgentAnalysis
     suggestions: AgentSuggestions
     metadata: Dict[str, Any]
+    token_usage: Optional[Dict[str, Any]] = None  # Token usage for this agent's execution
 
 
 # Base Agent Interface
@@ -70,9 +71,9 @@ class AgentInterface(ABC):
         """
         pass
     
-    async def _call_llm(self, system_prompt: str, user_prompt: str, max_retries: int = 3) -> str:
+    async def _call_llm(self, system_prompt: str, user_prompt: str, max_retries: int = 3) -> tuple[str, Optional[TokenUsage]]:
         """
-        Call LLM with agent's configured model.
+        Call LLM with agent's configured model and track token usage.
         Follows engine.py improve_prompt() pattern with retry logic.
         
         Args:
@@ -81,7 +82,7 @@ class AgentInterface(ABC):
             max_retries: Maximum retry attempts
         
         Returns:
-            LLM response text
+            Tuple of (LLM response text, TokenUsage object)
         """
         client = Groq(api_key=os.getenv("GROQ_API_KEY"))
         
@@ -99,14 +100,14 @@ class AgentInterface(ABC):
                 
                 result = response.choices[0].message.content.strip()
                 
-                # Track token usage
-                tracker.track_llm_call(
+                # Track token usage (capture return value)
+                usage = tracker.track_llm_call(
                     system_prompt + "\n\n" + user_prompt,
                     result,
                     self.model_config.model_id
                 )
                 
-                return result
+                return result, usage
                 
             except Exception as e:
                 error_msg = str(e)
@@ -117,14 +118,14 @@ class AgentInterface(ABC):
                         f"{self.name} agent: All {max_retries} attempts failed.",
                         exc_info=True
                     )
-                    return f"[Error: {error_msg}]"
+                    return f"[Error: {error_msg}]", None
                 
                 if wait_time > 0:
                     logger.info(f"{self.name} agent: Retrying in {wait_time} seconds...")
                     import time
                     time.sleep(wait_time)
         
-        return "[Error: Unable to generate response]"
+        return "[Error: Unable to generate response]", None
     
     @abstractmethod
     async def analyze(self, prompt: str) -> AgentAnalysis:
@@ -155,21 +156,35 @@ class AgentInterface(ABC):
     
     async def run(self, prompt: str) -> AgentResult:
         """
-        Full agent execution (analyze + propose).
+        Full agent execution (analyze + propose) with token tracking.
         
         Args:
             prompt: Prompt text to optimize
         
         Returns:
-            Complete AgentResult
+            Complete AgentResult with token usage
         """
+        # Execute agent pipeline
         analysis = await self.analyze(prompt)
         suggestions = await self.propose_improvements(prompt, analysis)
+        
+        # Aggregate token usage from both calls
+        total_usage = None
+        if hasattr(self, '_last_token_usage') and self._last_token_usage:
+            total_usage = {
+                "prompt_tokens": self._last_token_usage.get("prompt_tokens", 0),
+                "completion_tokens": self._last_token_usage.get("completion_tokens", 0),
+                "total_tokens": self._last_token_usage.get("total_tokens", 0),
+                "cost_usd": self._last_token_usage.get("cost_usd", 0.0),
+                "model": self.model_config.model_id
+            }
+        
         return AgentResult(
             agent_name=self.name,
             analysis=analysis,
             suggestions=suggestions,
-            metadata=self.get_metadata()
+            metadata=self.get_metadata(),
+            token_usage=total_usage
         )
     
     def get_metadata(self) -> Dict[str, Any]:
@@ -231,10 +246,23 @@ Return ONLY a JSON object:
     
     async def analyze(self, prompt: str) -> AgentAnalysis:
         """Analyze prompt syntax and clarity"""
-        response = await self._call_llm(
+        response, usage = await self._call_llm(
             self.analysis_prompt,
             f"Analyze this prompt:\n\n{prompt}"
         )
+        
+        # Initialize token tracking
+        if not hasattr(self, '_last_token_usage'):
+            self._last_token_usage = {}
+        
+        # Aggregate token usage (analysis call)
+        if usage:
+            self._last_token_usage = {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+                "cost_usd": usage.cost_usd
+            }
         
         # Parse JSON response
         try:
@@ -259,10 +287,17 @@ Return ONLY a JSON object:
     
     async def propose_improvements(self, prompt: str, analysis: AgentAnalysis) -> AgentSuggestions:
         """Propose syntax improvements"""
-        response = await self._call_llm(
+        response, usage = await self._call_llm(
             self.improvement_prompt,
             f"Improve this prompt:\n\n{prompt}\n\nWeaknesses found: {', '.join(analysis.weaknesses)}"
         )
+        
+        # Aggregate token usage (improvement call)
+        if usage and hasattr(self, '_last_token_usage'):
+            self._last_token_usage["prompt_tokens"] += usage.prompt_tokens
+            self._last_token_usage["completion_tokens"] += usage.completion_tokens
+            self._last_token_usage["total_tokens"] += usage.total_tokens
+            self._last_token_usage["cost_usd"] += usage.cost_usd
         
         # Parse JSON response
         try:
@@ -329,10 +364,23 @@ Return ONLY a JSON object:
     
     async def analyze(self, prompt: str) -> AgentAnalysis:
         """Analyze prompt structure"""
-        response = await self._call_llm(
+        response, usage = await self._call_llm(
             self.analysis_prompt,
             f"Analyze this prompt:\n\n{prompt}"
         )
+        
+        # Initialize token tracking
+        if not hasattr(self, '_last_token_usage'):
+            self._last_token_usage = {}
+        
+        # Aggregate token usage (analysis call)
+        if usage:
+            self._last_token_usage = {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+                "cost_usd": usage.cost_usd
+            }
         
         # Parse JSON response (same pattern as SyntaxAgent)
         try:
@@ -357,10 +405,17 @@ Return ONLY a JSON object:
     
     async def propose_improvements(self, prompt: str, analysis: AgentAnalysis) -> AgentSuggestions:
         """Propose structure improvements"""
-        response = await self._call_llm(
+        response, usage = await self._call_llm(
             self.improvement_prompt,
             f"Improve this prompt:\n\n{prompt}\n\nWeaknesses found: {', '.join(analysis.weaknesses)}"
         )
+        
+        # Aggregate token usage (improvement call)
+        if usage and hasattr(self, '_last_token_usage'):
+            self._last_token_usage["prompt_tokens"] += usage.prompt_tokens
+            self._last_token_usage["completion_tokens"] += usage.completion_tokens
+            self._last_token_usage["total_tokens"] += usage.total_tokens
+            self._last_token_usage["cost_usd"] += usage.cost_usd
         
         # Parse JSON response
         try:
@@ -427,10 +482,23 @@ Return ONLY a JSON object:
     
     async def analyze(self, prompt: str) -> AgentAnalysis:
         """Analyze prompt domain context"""
-        response = await self._call_llm(
+        response, usage = await self._call_llm(
             self.analysis_prompt,
             f"Analyze this prompt:\n\n{prompt}"
         )
+        
+        # Initialize token tracking
+        if not hasattr(self, '_last_token_usage'):
+            self._last_token_usage = {}
+        
+        # Aggregate token usage (analysis call)
+        if usage:
+            self._last_token_usage = {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+                "cost_usd": usage.cost_usd
+            }
         
         # Parse JSON response (same pattern as other agents)
         try:
@@ -455,10 +523,17 @@ Return ONLY a JSON object:
     
     async def propose_improvements(self, prompt: str, analysis: AgentAnalysis) -> AgentSuggestions:
         """Propose domain improvements"""
-        response = await self._call_llm(
+        response, usage = await self._call_llm(
             self.improvement_prompt,
             f"Improve this prompt:\n\n{prompt}\n\nWeaknesses found: {', '.join(analysis.weaknesses)}"
         )
+        
+        # Aggregate token usage (improvement call)
+        if usage and hasattr(self, '_last_token_usage'):
+            self._last_token_usage["prompt_tokens"] += usage.prompt_tokens
+            self._last_token_usage["completion_tokens"] += usage.completion_tokens
+            self._last_token_usage["total_tokens"] += usage.total_tokens
+            self._last_token_usage["cost_usd"] += usage.cost_usd
         
         # Parse JSON response
         try:

@@ -11,9 +11,11 @@ This script provides functionality to save text content to organized folders:
 import os
 import json
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
+import uuid
+import difflib
 
 # Common LLM names for validation
 COMMON_LLMS = [
@@ -22,13 +24,27 @@ COMMON_LLMS = [
 ]
 
 class FileStorage:
-    """Simple file storage system for prompts and results with CSV support."""
+    """
+    File storage system for prompts and results with CSV support.
     
-    def __init__(self, base_dir: str = "."):
-        """Initialize file storage with base directory."""
+    STORAGE CONSOLIDATION (2025-12-04):
+    - Database-first pattern: PostgreSQL = single source of truth
+    - CSV = export-only (generated from database on demand)
+    - Direct CSV writes DEPRECATED (use database + export instead)
+    """
+    
+    def __init__(self, base_dir: str = ".", db_session=None):
+        """
+        Initialize file storage with base directory.
+        
+        Args:
+            base_dir: Base directory for file storage
+            db_session: Optional SQLAlchemy session for database-first exports
+        """
         self.base_dir = Path(base_dir)
         self.prompts_dir = self.base_dir / "prompts"
         self.results_dir = self.base_dir / "results"
+        self.db_session = db_session  # Database session for exports
         
         # Ensure directories exist
         self.prompts_dir.mkdir(exist_ok=True)
@@ -522,19 +538,101 @@ class FileStorage:
             print(f"❌ Error saving multi-agent result to CSV: {e}")
             raise
     
-    def get_agent_effectiveness(self, csv_filename: str = 'multi_agent_log.csv') -> Dict[str, Any]:
+    def record_feedback(
+        self,
+        request_id: str,
+        user_choice: str,
+        judge_winner: str,
+        agent_winner: str,
+        csv_filename: str = 'multi_agent_log.csv'
+    ) -> bool:
         """
-        Analyze agent effectiveness from multi-agent logs.
+        Record user feedback for a multi-agent request (Darwinian Evolution - Phase 1).
+        
+        Args:
+            request_id: Request ID to update
+            user_choice: User's choice ("original", "single", "multi")
+            judge_winner: Agent selected by judge (syntax/structure/domain)
+            agent_winner: Agent that should be credited based on user choice (none/template/syntax/structure/domain)
+            csv_filename: CSV filename (default: multi_agent_log.csv)
+        
+        Returns:
+            bool: True if feedback recorded successfully
+        """
+        csv_path = self.base_dir / csv_filename
+        
+        if not csv_path.exists():
+            print(f"❌ CSV file not found: {csv_path}")
+            return False
+        
+        # Read all rows
+        data = self.read_from_csv(csv_filename)
+        if not data:
+            print(f"❌ No data in CSV: {csv_path}")
+            return False
+        
+        # Find the row with matching request_id
+        row_found = False
+        for row in data:
+            if row.get('request_id') == request_id:
+                row_found = True
+                # Add feedback columns
+                row['user_feedback'] = user_choice
+                row['agent_winner'] = agent_winner
+                row['judge_correct'] = str(judge_winner == agent_winner).lower()
+                row['feedback_timestamp'] = datetime.now().isoformat()
+                break
+        
+        if not row_found:
+            print(f"❌ Request ID not found: {request_id}")
+            return False
+        
+        # Write back to CSV with extended headers
+        try:
+            # Get all unique headers (including new feedback columns)
+            all_headers = set()
+            for row in data:
+                all_headers.update(row.keys())
+            headers = sorted(list(all_headers))
+            
+            with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=headers)
+                writer.writeheader()
+                for row in data:
+                    writer.writerow({key: row.get(key, '') for key in headers})
+            
+            print(f"✅ Feedback recorded for request_id: {request_id}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error recording feedback: {e}")
+            return False
+    
+    def get_agent_effectiveness(self, csv_filename: str = 'multi_agent_log.csv', user_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Analyze agent effectiveness from multi-agent logs (extended for Darwinian Evolution).
         
         Args:
             csv_filename: Name of the CSV file (default: multi_agent_log.csv)
+            user_id: Optional user ID to filter results (for per-user effectiveness)
         
         Returns:
-            Dict with agent statistics:
+            Dict with agent statistics including feedback metrics:
             {
-                "syntax": {"wins": 10, "avg_score": 8.5, "win_rate": 0.33},
-                "structure": {"wins": 15, "avg_score": 9.0, "win_rate": 0.50},
-                "domain": {"wins": 5, "avg_score": 7.8, "win_rate": 0.17}
+                "syntax": {
+                    "wins": 10, 
+                    "total_requests": 30,
+                    "win_rate": 0.33, 
+                    "avg_score": 8.5,
+                    "user_wins": 12,
+                    "user_win_rate": 0.40,
+                    "judge_accuracy": 0.83
+                },
+                ...
+                "feedback_rate": 0.75,
+                "total_feedback": 22,
+                "total_requests": 30,
+                "learning_status": "Warming Up"
             }
         """
         data = self.read_from_csv(csv_filename)
@@ -542,14 +640,40 @@ class FileStorage:
         if not data:
             return {}
         
-        # Count wins per agent
+        # Filter by user_id if provided
+        if user_id:
+            data = [entry for entry in data if entry.get('user_id') == user_id]
+        
+        if not data:
+            return {}
+        
+        # Count wins per agent (judge decisions)
         wins = {}
         scores = {}
+        user_wins = {}  # User feedback wins (Darwinian)
+        judge_correct = {}  # Judge correctness tracking
+        
+        total_feedback = 0
         
         for entry in data:
+            # Judge wins (original logic)
             selected = entry.get('selected_agent', '')
             if selected:
                 wins[selected] = wins.get(selected, 0) + 1
+            
+            # User feedback wins (Darwinian)
+            agent_winner = entry.get('agent_winner', '')
+            if agent_winner and agent_winner != 'none' and agent_winner != 'template':
+                user_wins[agent_winner] = user_wins.get(agent_winner, 0) + 1
+                total_feedback += 1
+                
+                # Track judge correctness
+                is_correct = entry.get('judge_correct', '').lower() == 'true'
+                if selected not in judge_correct:
+                    judge_correct[selected] = {'correct': 0, 'total': 0}
+                judge_correct[selected]['total'] += 1
+                if is_correct:
+                    judge_correct[selected]['correct'] += 1
             
             # Aggregate scores for all agents
             # Dynamically detect agent columns
@@ -567,15 +691,38 @@ class FileStorage:
         total_requests = len(data)
         effectiveness = {}
         
-        # Get all unique agents (from wins and scores)
-        all_agents = set(wins.keys()) | set(scores.keys())
+        # Get all unique agents (from wins, scores, and user_wins)
+        all_agents = set(wins.keys()) | set(scores.keys()) | set(user_wins.keys())
         
         for agent in all_agents:
+            agent_judge_correct = judge_correct.get(agent, {'correct': 0, 'total': 0})
             effectiveness[agent] = {
                 "wins": wins.get(agent, 0),
+                "total_requests": total_requests,
                 "win_rate": wins.get(agent, 0) / total_requests if total_requests > 0 else 0.0,
-                "avg_score": sum(scores.get(agent, [])) / len(scores.get(agent, [])) if agent in scores and scores[agent] else 0.0
+                "avg_score": sum(scores.get(agent, [])) / len(scores.get(agent, [])) if agent in scores and scores[agent] else 0.0,
+                "user_wins": user_wins.get(agent, 0),
+                "user_win_rate": user_wins.get(agent, 0) / total_feedback if total_feedback > 0 else 0.0,
+                "judge_accuracy": agent_judge_correct['correct'] / agent_judge_correct['total'] if agent_judge_correct['total'] > 0 else 0.0
             }
+        
+        # Add overall feedback metrics
+        feedback_rate = total_feedback / total_requests if total_requests > 0 else 0.0
+        
+        # Determine learning status
+        if total_feedback == 0:
+            learning_status = "Cold Start"
+        elif total_feedback < 10:
+            learning_status = "Warming Up"
+        else:
+            learning_status = "Learned"
+        
+        effectiveness['_metadata'] = {
+            'feedback_rate': feedback_rate,
+            'total_feedback': total_feedback,
+            'total_requests': total_requests,
+            'learning_status': learning_status
+        }
         
         return effectiveness
     
@@ -632,6 +779,374 @@ class FileStorage:
                 }
         
         return None  # Not found
+    
+    # ============================================================================
+    # TEMPORAL ANALYSIS METHODS (Week 12)
+    # ============================================================================
+    
+    def save_prompt_version_chain(self, prompt_id: str, versions: List[Dict[str, Any]]) -> str:
+        """
+        Save version chain to JSON file.
+        
+        Args:
+            prompt_id: UUID of the prompt
+            versions: List of VersionNode dicts with keys:
+                - version_id: UUID
+                - parent_version_id: UUID or None
+                - timestamp: ISO 8601 string
+                - text: str
+                - score: float (0-100)
+                - change_type: str ("structure", "wording", "length", "other")
+                
+        Returns:
+            str: Filename where chain was saved
+        """
+        # Validate version chain
+        if not self.validate_version_chain(versions):
+            raise ValueError("Invalid version chain: acyclic or timestamp violation")
+        
+        filename = f"{prompt_id}_chain.json"
+        filepath = self.prompts_dir / filename
+        
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(versions, f, indent=2)
+            print(f"✅ Version chain saved to: {filepath}")
+            return filename
+        except Exception as e:
+            print(f"❌ Error saving version chain: {e}")
+            raise
+    
+    def load_prompt_version_chain(self, prompt_id: str) -> List[Dict[str, Any]]:
+        """
+        Load version chain from JSON file.
+        
+        Args:
+            prompt_id: UUID of the prompt
+            
+        Returns:
+            List of VersionNode dicts sorted by timestamp (empty list if not found)
+        """
+        filename = f"{prompt_id}_chain.json"
+        filepath = self.prompts_dir / filename
+        
+        if not filepath.exists():
+            return []
+        
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                versions = json.load(f)
+            
+            # Sort by timestamp
+            versions.sort(key=lambda v: v['timestamp'])
+            return versions
+        except Exception as e:
+            print(f"❌ Error loading version chain: {e}")
+            return []
+    
+    def save_causal_edges(self, prompt_id: str, edges: List[Dict[str, Any]]) -> str:
+        """
+        Save causal edges to JSON file.
+        
+        Args:
+            prompt_id: UUID of the prompt
+            edges: List of CausalEdge dicts with keys:
+                - from_version_id: UUID
+                - to_version_id: UUID
+                - change_type: str
+                - score_delta: float
+                - time_delta: str (timedelta string)
+                
+        Returns:
+            str: Filename where edges were saved
+        """
+        filename = f"{prompt_id}_causal.json"
+        filepath = self.prompts_dir / filename
+        
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(edges, f, indent=2)
+            print(f"✅ Causal edges saved to: {filepath}")
+            return filename
+        except Exception as e:
+            print(f"❌ Error saving causal edges: {e}")
+            raise
+    
+    def load_causal_edges(self, prompt_id: str) -> List[Dict[str, Any]]:
+        """
+        Load causal edges from JSON file.
+        
+        Args:
+            prompt_id: UUID of the prompt
+            
+        Returns:
+            List of CausalEdge dicts (empty list if not found)
+        """
+        filename = f"{prompt_id}_causal.json"
+        filepath = self.prompts_dir / filename
+        
+        if not filepath.exists():
+            return []
+        
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                edges = json.load(f)
+            return edges
+        except Exception as e:
+            print(f"❌ Error loading causal edges: {e}")
+            return []
+    
+    def validate_version_chain(self, versions: List[Dict[str, Any]]) -> bool:
+        """
+        Validate version chain integrity.
+        
+        Checks:
+        - All parent_version_id references exist in chain (except first)
+        - No cycles (directed acyclic graph)
+        - Timestamps monotonically increasing along parent→child paths
+        
+        Args:
+            versions: List of VersionNode dicts
+            
+        Returns:
+            bool: True if valid, False otherwise
+        """
+        if not versions:
+            return True
+        
+        # Build version ID set
+        version_ids = {v['version_id'] for v in versions}
+        
+        # Check parent references exist
+        for version in versions:
+            parent_id = version.get('parent_version_id')
+            if parent_id is not None and parent_id not in version_ids:
+                print(f"❌ Validation failed: Parent {parent_id} not found in chain")
+                return False
+        
+        # Check for cycles using DFS
+        visited = set()
+        rec_stack = set()
+        
+        def has_cycle(version_id: str) -> bool:
+            visited.add(version_id)
+            rec_stack.add(version_id)
+            
+            # Find children
+            for v in versions:
+                if v.get('parent_version_id') == version_id:
+                    child_id = v['version_id']
+                    if child_id not in visited:
+                        if has_cycle(child_id):
+                            return True
+                    elif child_id in rec_stack:
+                        return True
+            
+            rec_stack.remove(version_id)
+            return False
+        
+        # Check all roots (versions with no parent)
+        for version in versions:
+            if version.get('parent_version_id') is None:
+                if has_cycle(version['version_id']):
+                    print(f"❌ Validation failed: Cycle detected")
+                    return False
+        
+        # Check timestamp monotonicity along paths
+        for version in versions:
+            parent_id = version.get('parent_version_id')
+            if parent_id:
+                parent = next((v for v in versions if v['version_id'] == parent_id), None)
+                if parent:
+                    parent_time = datetime.fromisoformat(parent['timestamp'].replace('Z', '+00:00'))
+                    child_time = datetime.fromisoformat(version['timestamp'].replace('Z', '+00:00'))
+                    if child_time <= parent_time:
+                        print(f"❌ Validation failed: Timestamp not monotonic for {version['version_id']}")
+                        return False
+        
+        return True
+    
+    def compute_change_type(self, old_text: str, new_text: str) -> str:
+        """
+        Compute change type using difflib edit distance.
+        
+        Args:
+            old_text: Previous version text
+            new_text: New version text
+            
+        Returns:
+            str: "structure", "wording", "length", or "other"
+        """
+        # Compute similarity ratio
+        ratio = difflib.SequenceMatcher(None, old_text, new_text).ratio()
+        
+        # Major rewrite
+        if ratio < 0.5:
+            return "structure"
+        
+        # Length change
+        length_ratio = len(new_text) / max(len(old_text), 1)
+        if length_ratio > 1.5 or length_ratio < 0.5:
+            return "length"
+        
+        # Minor wording changes
+        return "wording"
+    
+    def compute_change_magnitude(self, old_text: str, new_text: str) -> float:
+        """
+        Compute change magnitude (normalized edit distance).
+        
+        Args:
+            old_text: Previous version text
+            new_text: New version text
+            
+        Returns:
+            float: 0-1 (0 = identical, 1 = completely different)
+        """
+        ratio = difflib.SequenceMatcher(None, old_text, new_text).ratio()
+        return 1.0 - ratio
+
+
+    # ============================================================================
+    # STORAGE CONSOLIDATION PHASE 2: Database-First Export Methods
+    # Added: 2025-12-04
+    # Purpose: Export-only CSV generation from database (single source of truth)
+    # ============================================================================
+    
+    def export_multi_agent_results_to_csv(self, csv_filename='multi_agent_log.csv') -> str:
+        """
+        EXPORT ONLY - Read multi-agent results from database, write to CSV.
+        
+        Database-First Pattern:
+        - Reads from PostgreSQL (single source of truth)
+        - Generates CSV for analysis/backup
+        - NEVER writes directly to CSV from application code
+        
+        Args:
+            csv_filename: CSV filename (default: multi_agent_log.csv)
+            
+        Returns:
+            str: Path to generated CSV file
+            
+        Raises:
+            ValueError: If db_session not provided
+        """
+        if not self.db_session:
+            raise ValueError("Database session required for export. Initialize FileStorage with db_session parameter.")
+        
+        # Import CRUD functions
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from packages.db.crud import get_all_prompt_versions
+        
+        # Query database (single source of truth)
+        versions = get_all_prompt_versions(self.db_session, limit=1000)
+        
+        csv_path = self.base_dir / csv_filename
+        
+        # Write to CSV
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = [
+                'request_id', 'timestamp', 'original_prompt', 'final_prompt',
+                'selected_agent', 'syntax_score', 'structure_score', 'domain_score',
+                'syntax_improved', 'structure_improved', 'domain_improved'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            # Group versions by prompt_id
+            by_prompt = {}
+            for v in versions:
+                if v.prompt_id not in by_prompt:
+                    by_prompt[v.prompt_id] = []
+                by_prompt[v.prompt_id].append(v)
+            
+            # Export each prompt's versions
+            for prompt_id, prompt_versions in by_prompt.items():
+                # Find original and agent versions
+                original = prompt_versions[0] if prompt_versions else None
+                agent_versions = {v.source: v for v in prompt_versions if v.source in ['syntax', 'structure', 'domain']}
+                
+                if not original:
+                    continue
+                
+                row = {
+                    'request_id': str(prompt_id),
+                    'timestamp': original.created_at.isoformat(),
+                    'original_prompt': original.text,
+                    'final_prompt': prompt_versions[-1].text if prompt_versions else '',
+                    'selected_agent': prompt_versions[-1].source if prompt_versions else 'unknown',
+                    'syntax_score': 0.0,
+                    'structure_score': 0.0,
+                    'domain_score': 0.0,
+                    'syntax_improved': agent_versions.get('syntax').text if agent_versions.get('syntax') else '',
+                    'structure_improved': agent_versions.get('structure').text if agent_versions.get('structure') else '',
+                    'domain_improved': agent_versions.get('domain').text if agent_versions.get('domain') else ''
+                }
+                
+                writer.writerow(row)
+        
+        print(f"✅ Exported {len(by_prompt)} multi-agent results from DB to: {csv_path}")
+        return str(csv_path)
+    
+    def export_temporal_versions_to_csv(self, csv_filename='temporal_versions.csv') -> str:
+        """
+        EXPORT ONLY - Read temporal version chains from database, write to CSV.
+        
+        Args:
+            csv_filename: CSV filename (default: temporal_versions.csv)
+            
+        Returns:
+            str: Path to generated CSV file
+        """
+        if not self.db_session:
+            raise ValueError("Database session required for export.")
+        
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from packages.db.crud import get_all_prompt_versions
+        
+        versions = get_all_prompt_versions(self.db_session, limit=1000)
+        
+        csv_path = self.base_dir / csv_filename
+        
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = [
+                'version_id', 'parent_version_id', 'prompt_id', 'timestamp',
+                'text', 'change_type', 'change_magnitude', 'source'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for v in versions:
+                writer.writerow({
+                    'version_id': str(v.id),
+                    'parent_version_id': str(v.parent_version_id) if v.parent_version_id else '',
+                    'prompt_id': str(v.prompt_id),
+                    'timestamp': v.created_at.isoformat(),
+                    'text': v.text,
+                    'change_type': v.change_type,
+                    'change_magnitude': v.change_magnitude,
+                    'source': v.source
+                })
+        
+        print(f"✅ Exported {len(versions)} temporal versions from DB to: {csv_path}")
+        return str(csv_path)
+    
+    def export_all_to_csv(self) -> Dict[str, str]:
+        """
+        EXPORT ONLY - Export all data from database to CSV files.
+        
+        Returns:
+            Dict[str, str]: {"multi_agent": "path", "temporal": "path"}
+        """
+        if not self.db_session:
+            raise ValueError("Database session required for export.")
+        
+        return {
+            "multi_agent": self.export_multi_agent_results_to_csv(),
+            "temporal": self.export_temporal_versions_to_csv()
+        }
 
 
 def main():

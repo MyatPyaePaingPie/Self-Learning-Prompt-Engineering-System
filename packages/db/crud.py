@@ -101,3 +101,256 @@ def get_security_inputs(session: Session, limit: int = 100,
     
     query = query.limit(limit)
     return session.execute(query).scalars().all()
+
+# ============================================================================
+# STORAGE CONSOLIDATION PHASE 1: Database-First CRUD Functions
+# Added: 2025-12-04
+# Purpose: Single source of truth - all data queries go through database
+# ============================================================================
+
+def get_all_prompt_versions(session: Session, limit: int = 1000) -> list[PromptVersion]:
+    """
+    Get all prompt versions for CSV export.
+    Used by export_multi_agent_results_to_csv() in storage layer.
+    """
+    return session.execute(
+        sa.select(PromptVersion)
+        .order_by(PromptVersion.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
+
+def get_prompt_versions_by_source(session: Session, source: str, limit: int = 1000) -> list[PromptVersion]:
+    """
+    Get versions by agent source (syntax, structure, domain).
+    Used for agent-specific analysis.
+    """
+    return session.execute(
+        sa.select(PromptVersion)
+        .where(PromptVersion.source == source)
+        .order_by(PromptVersion.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
+
+def get_prompt_version_chain(session: Session, prompt_id: uuid.UUID) -> list[PromptVersion]:
+    """
+    Get version chain ordered by timestamp (parent→child).
+    Used for temporal analysis and version chain visualization.
+    """
+    return session.execute(
+        sa.select(PromptVersion)
+        .where(PromptVersion.prompt_id == prompt_id)
+        .order_by(PromptVersion.created_at)
+    ).scalars().all()
+
+def get_agent_effectiveness_stats(session: Session) -> dict[str, dict]:
+    """
+    Calculate agent effectiveness statistics.
+    Returns: {"syntax": {"wins": 10, "total": 30, "win_rate": 0.33, "avg_score": 8.5}, ...}
+    """
+    try:
+        # Get all versions
+        versions = session.execute(sa.select(PromptVersion)).scalars().all()
+        
+        # Handle empty database gracefully
+        if not versions:
+            return {}
+        
+        # Calculate stats per agent
+        stats = {}
+        for version in versions:
+            source = version.source
+            if not source:  # Skip versions without source
+                continue
+                
+            if source not in stats:
+                stats[source] = {"wins": 0, "total": 0, "scores": []}
+            
+            stats[source]["total"] += 1
+            
+            # Get score for this version
+            try:
+                score_row = session.execute(
+                    sa.select(JudgeScore).where(JudgeScore.prompt_version_id == version.id)
+                ).scalar_one_or_none()
+                
+                if score_row:
+                    total_score = (score_row.clarity + score_row.specificity + 
+                                  score_row.actionability + score_row.structure + 
+                                  score_row.context_use)
+                    stats[source]["scores"].append(total_score)
+                    
+                    # Check if this is the best version for its prompt
+                    best = session.execute(
+                        sa.select(BestHead).where(BestHead.prompt_id == version.prompt_id)
+                    ).scalar_one_or_none()
+                    
+                    if best and best.prompt_version_id == version.id:
+                        stats[source]["wins"] += 1
+            except Exception as e:
+                # Skip this version if score query fails
+                continue
+        
+        # Calculate win rates and averages
+        for source in stats:
+            total = stats[source]["total"]
+            wins = stats[source]["wins"]
+            scores = stats[source]["scores"]
+            
+            stats[source]["win_rate"] = wins / total if total > 0 else 0.0
+            stats[source]["avg_score"] = sum(scores) / len(scores) if scores else 0.0
+            del stats[source]["scores"]  # Remove raw scores from output
+        
+        return stats
+    except Exception as e:
+        # Return empty dict on any error
+        return {}
+
+def get_temporal_statistics(session: Session, prompt_id: uuid.UUID) -> dict:
+    """
+    Calculate temporal statistics for a prompt.
+    Returns: {
+        "trend": "improving" | "degrading" | "stable",
+        "avg_score": float,
+        "score_range": [min, max],
+        "version_count": int,
+        "time_span_days": float
+    }
+    """
+    versions = get_prompt_version_chain(session, prompt_id)
+    
+    if not versions:
+        return {"trend": "stable", "avg_score": 0.0, "score_range": [0, 0], 
+                "version_count": 0, "time_span_days": 0.0}
+    
+    # Get scores for all versions
+    scores = []
+    for version in versions:
+        score_row = session.execute(
+            sa.select(JudgeScore).where(JudgeScore.prompt_version_id == version.id)
+        ).scalar_one_or_none()
+        
+        if score_row:
+            total_score = (score_row.clarity + score_row.specificity + 
+                          score_row.actionability + score_row.structure + 
+                          score_row.context_use)
+            scores.append(total_score)
+    
+    # Calculate trend
+    if len(scores) < 2:
+        trend = "stable"
+    else:
+        first_half_avg = sum(scores[:len(scores)//2]) / (len(scores)//2)
+        second_half_avg = sum(scores[len(scores)//2:]) / (len(scores) - len(scores)//2)
+        
+        if second_half_avg > first_half_avg * 1.1:
+            trend = "improving"
+        elif second_half_avg < first_half_avg * 0.9:
+            trend = "degrading"
+        else:
+            trend = "stable"
+    
+    # Calculate time span
+    time_span = (versions[-1].created_at - versions[0].created_at).total_seconds() / 86400
+    
+    return {
+        "trend": trend,
+        "avg_score": sum(scores) / len(scores) if scores else 0.0,
+        "score_range": [min(scores), max(scores)] if scores else [0, 0],
+        "version_count": len(versions),
+        "time_span_days": time_span
+    }
+
+def get_causal_edges(session: Session, prompt_id: uuid.UUID) -> list[dict]:
+    """
+    Get causal edges (parent→child transitions with score deltas).
+    Returns: [{"from_version_id": UUID, "to_version_id": UUID, 
+               "change_type": str, "score_delta": float, "time_delta": str}, ...]
+    """
+    versions = get_prompt_version_chain(session, prompt_id)
+    edges = []
+    
+    for version in versions:
+        if version.parent_version_id is None:
+            continue
+        
+        # Get parent version
+        parent = session.execute(
+            sa.select(PromptVersion).where(PromptVersion.id == version.parent_version_id)
+        ).scalar_one_or_none()
+        
+        if not parent:
+            continue
+        
+        # Get scores
+        version_score_row = session.execute(
+            sa.select(JudgeScore).where(JudgeScore.prompt_version_id == version.id)
+        ).scalar_one_or_none()
+        
+        parent_score_row = session.execute(
+            sa.select(JudgeScore).where(JudgeScore.prompt_version_id == parent.id)
+        ).scalar_one_or_none()
+        
+        if not version_score_row or not parent_score_row:
+            continue
+        
+        version_total = (version_score_row.clarity + version_score_row.specificity + 
+                        version_score_row.actionability + version_score_row.structure + 
+                        version_score_row.context_use)
+        parent_total = (parent_score_row.clarity + parent_score_row.specificity + 
+                       parent_score_row.actionability + parent_score_row.structure + 
+                       parent_score_row.context_use)
+        
+        time_delta = version.created_at - parent.created_at
+        
+        edges.append({
+            "from_version_id": str(parent.id),
+            "to_version_id": str(version.id),
+            "change_type": version.change_type,
+            "score_delta": version_total - parent_total,
+            "time_delta": str(time_delta)
+        })
+    
+    return edges
+
+def get_score_trends(session: Session, prompt_id: uuid.UUID) -> list[tuple]:
+    """
+    Get (timestamp, score) tuples for timeline visualization.
+    Returns: [(datetime, float), ...]
+    """
+    versions = get_prompt_version_chain(session, prompt_id)
+    trends = []
+    
+    for version in versions:
+        score_row = session.execute(
+            sa.select(JudgeScore).where(JudgeScore.prompt_version_id == version.id)
+        ).scalar_one_or_none()
+        
+        if score_row:
+            total_score = (score_row.clarity + score_row.specificity + 
+                          score_row.actionability + score_row.structure + 
+                          score_row.context_use)
+            trends.append((version.created_at, total_score))
+    
+    return trends
+
+def get_change_type_correlations(session: Session, prompt_id: uuid.UUID) -> dict[str, float]:
+    """
+    Calculate average score delta per change_type.
+    Returns: {"structure": 2.5, "wording": -0.3, "length": 1.2, "other": 0.0}
+    """
+    edges = get_causal_edges(session, prompt_id)
+    
+    correlations = {"structure": [], "wording": [], "length": [], "other": []}
+    
+    for edge in edges:
+        change_type = edge["change_type"]
+        score_delta = edge["score_delta"]
+        
+        if change_type in correlations:
+            correlations[change_type].append(score_delta)
+    
+    # Calculate averages
+    return {
+        change_type: (sum(deltas) / len(deltas) if deltas else 0.0)
+        for change_type, deltas in correlations.items()
+    }

@@ -20,6 +20,10 @@ class PromptVersion(Base):
     explanation: Mapped[dict] = mapped_column(JSON)
     source: Mapped[str]
     created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+    # Temporal fields for Week 12
+    parent_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("prompt_versions.id", ondelete="SET NULL"), default=None)
+    change_type: Mapped[str] = mapped_column(default="other")  # "structure", "wording", "length", "other"
+    change_magnitude: Mapped[float] = mapped_column(default=0.0)  # 0-1 normalized edit distance
 
 class JudgeScore(Base):
     __tablename__ = "judge_scores"

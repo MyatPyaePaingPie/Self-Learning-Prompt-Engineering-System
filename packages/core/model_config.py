@@ -59,10 +59,10 @@ MODEL_REGISTRY: Dict[str, ModelConfig] = {
     ),
     
     "powerful": ModelConfig(
-        model_id="llama-3.1-70b-versatile",
-        display_name="Llama 3.1 70B (Powerful)",
+        model_id="llama-3.3-70b-versatile",
+        display_name="Llama 3.3 70B (Powerful)",
         speed=ModelSpeed.MODERATE,
-        cost=ModelCost.HIGH,
+        cost=ModelCost.MODERATE,  # Same price as balanced (3.1-70b is decommissioned)
         use_case="Deep domain analysis and reasoning",
         max_tokens=2048,
         temperature=0.8  # More creative for domain

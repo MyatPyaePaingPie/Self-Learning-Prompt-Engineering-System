@@ -12,12 +12,15 @@ from packages.core.agent_registry import AgentRegistry
 
 
 class CoordinatorDecision(BaseModel):
-    """Coordinator's final decision"""
+    """Coordinator's final decision with token usage"""
     final_prompt: str
     selected_agent: str
     decision_rationale: str
     agent_results: List[AgentResult]
     vote_breakdown: Dict[str, float]
+    token_usage: Optional[Dict[str, Any]] = None  # Aggregated token usage across all agents
+    total_cost_usd: Optional[float] = None  # Total cost in USD
+    total_tokens: Optional[int] = None  # Total tokens used
 
 
 class AgentCoordinator:
@@ -58,6 +61,17 @@ class AgentCoordinator:
         tasks = [agent.run(prompt) for agent in self.agents]
         results = await asyncio.gather(*tasks)
         
+        # Aggregate token usage from all agents
+        token_usage_by_agent = {}
+        total_cost = 0.0
+        total_tokens = 0
+        
+        for result in results:
+            if result.token_usage:
+                token_usage_by_agent[result.agent_name] = result.token_usage
+                total_cost += result.token_usage.get("cost_usd", 0.0)
+                total_tokens += result.token_usage.get("total_tokens", 0)
+        
         # Weighted voting: Calculate scores
         weighted_scores = {}
         for result in results:
@@ -82,7 +96,10 @@ class AgentCoordinator:
             selected_agent=winner_name,
             decision_rationale=rationale,
             agent_results=results,
-            vote_breakdown=weighted_scores
+            vote_breakdown=weighted_scores,
+            token_usage=token_usage_by_agent if token_usage_by_agent else None,
+            total_cost_usd=total_cost if total_cost > 0 else None,
+            total_tokens=total_tokens if total_tokens > 0 else None
         )
     
     def get_agent_names(self) -> List[str]:
