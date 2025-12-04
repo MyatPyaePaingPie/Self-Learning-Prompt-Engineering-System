@@ -3,12 +3,25 @@ from typing import Dict
 from pydantic import BaseModel
 from datetime import datetime
 
-# Groq pricing (verified 2025-11-06)
+# Groq pricing (verified 2025-12-03)
+# Source: https://groq.com/pricing/
 GROQ_PRICING = {
+    "llama-3.1-8b-instant": {
+        "input": 0.00000005,   # $0.05 per 1M tokens (fastest, cheapest)
+        "output": 0.00000008,  # $0.08 per 1M tokens
+    },
     "llama-3.3-70b-versatile": {
-        "input": 0.00000059,   # $0.59 per 1M tokens
+        "input": 0.00000059,   # $0.59 per 1M tokens (current default)
         "output": 0.00000079,  # $0.79 per 1M tokens
-    }
+    },
+    "gemma2-9b-it": {
+        "input": 0.00000020,   # $0.20 per 1M tokens
+        "output": 0.00000020,  # $0.20 per 1M tokens
+    },
+    "mixtral-8x7b-32768": {
+        "input": 0.00000027,   # $0.27 per 1M tokens
+        "output": 0.00000027,  # $0.27 per 1M tokens
+    },
 }
 
 class TokenUsage(BaseModel):
@@ -60,7 +73,11 @@ class TokenTracker:
         return len(self.encoding.encode(text))
     
     def calculate_cost(self, prompt_tokens: int, completion_tokens: int, model: str) -> float:
-        pricing = GROQ_PRICING.get(model, GROQ_PRICING["llama-3.3-70b-versatile"])
+        """Calculate cost based on model-specific pricing. Falls back to 70B pricing if model not found."""
+        pricing = GROQ_PRICING.get(model)
+        if not pricing:
+            # Fallback to most expensive model for unknown models (conservative estimate)
+            pricing = GROQ_PRICING["llama-3.3-70b-versatile"]
         return (prompt_tokens * pricing["input"]) + (completion_tokens * pricing["output"])
     
     def track_llm_call(self, prompt: str, completion: str, model: str = "llama-3.3-70b-versatile") -> TokenUsage:

@@ -171,6 +171,15 @@ python tests/unit/test_file_storage.py
 - `search_csv_entries(filename, search_term, field=None)` - Search CSV data
 - `collect_prompt_data_interactive()` - Interactive data collection
 
+**NEW: Temporal Analysis API (Week 12):**
+- `save_prompt_version_chain(prompt_id, versions)` - Save version chain with parent-child links
+- `load_prompt_version_chain(prompt_id)` - Load version chain sorted by timestamp
+- `save_causal_edges(prompt_id, edges)` - Save causal correlation edges
+- `load_causal_edges(prompt_id)` - Load causal edges
+- `validate_version_chain(versions)` - Validate chain integrity (acyclic, monotonic)
+- `compute_change_type(old_text, new_text)` - Classify change type (structure/wording/length)
+- `compute_change_magnitude(old_text, new_text)` - Compute edit distance (0-1)
+
 ## API Usage
 
 ### Create and Improve a Prompt
@@ -303,11 +312,140 @@ docker build -f infra/docker/api/Dockerfile -t prompter-api .
 docker run -p 8000:8000 -e DATABASE_URL="..." prompter-api
 ```
 
+## NEW: Temporal Analysis & Version Chains (Week 12)
+
+The system now supports temporal analysis of prompt evolution with version chains and causal hints.
+
+### Version Chain Storage
+
+**File Format:** `prompts/{prompt_id}_chain.json`
+
+**Version Node Schema:**
+```python
+{
+    "version_id": "UUID",
+    "parent_version_id": "UUID or None",  # Links to parent version
+    "timestamp": "2025-12-03T10:30:00Z",  # ISO 8601
+    "text": "Prompt text",
+    "score": 75.5,  # Judge score (0-100)
+    "change_type": "wording",  # "structure", "wording", "length", "other"
+    "change_magnitude": 0.35  # Edit distance (0-1)
+}
+```
+
+**Parent-Child Relationships:**
+- Each version links to parent via `parent_version_id`
+- First version has `parent_version_id: None`
+- Forms directed acyclic graph (no cycles)
+- Timestamps monotonically increasing along chains
+
+**Validation Rules:**
+- All parent references must exist in chain
+- No cycles allowed (validated via DFS)
+- Timestamps must increase along parent→child paths
+
+### Causal Edge Storage
+
+**File Format:** `prompts/{prompt_id}_causal.json`
+
+**Causal Edge Schema:**
+```python
+{
+    "from_version_id": "UUID",
+    "to_version_id": "UUID",
+    "change_type": "structure",
+    "score_delta": 5.2,  # to_score - from_score
+    "time_delta": "0:02:30"  # timedelta string
+}
+```
+
+**Correlation Semantics:**
+- Edges represent parent→child transitions
+- NOT rigorous causal inference (simple correlation)
+- Used to detect patterns (e.g., "structure changes → score increases")
+
+### Usage Examples
+
+**Save Version Chain:**
+```python
+from file_storage import FileStorage
+
+storage = FileStorage()
+
+# Create version chain
+versions = [
+    {
+        "version_id": "uuid-1",
+        "parent_version_id": None,
+        "timestamp": "2025-11-01T10:00:00Z",
+        "text": "Write a Python function",
+        "score": 60.0,
+        "change_type": "other",
+        "change_magnitude": 0.0
+    },
+    {
+        "version_id": "uuid-2",
+        "parent_version_id": "uuid-1",
+        "timestamp": "2025-11-02T10:00:00Z",
+        "text": "Write an efficient Python function with docstring",
+        "score": 75.0,
+        "change_type": "wording",
+        "change_magnitude": 0.3
+    }
+]
+
+# Save chain (validates automatically)
+storage.save_prompt_version_chain("prompt-uuid", versions)
+
+# Load chain
+loaded = storage.load_prompt_version_chain("prompt-uuid")
+```
+
+**Compute Change Type:**
+```python
+old_text = "Write a function"
+new_text = "Write a comprehensive function with error handling and tests"
+
+change_type = storage.compute_change_type(old_text, new_text)  # "structure"
+magnitude = storage.compute_change_magnitude(old_text, new_text)  # 0.65
+```
+
+### Synthetic History Generation
+
+**Module:** `storage/temporal_data_generator.py`
+
+**Generate 30-Day History:**
+```python
+from temporal_data_generator import generate_synthetic_history
+
+# Generate 30 days of versions (2 per day = 60 versions)
+versions, edges = generate_synthetic_history(
+    prompt_id="test-prompt",
+    days=30,
+    versions_per_day=2
+)
+
+# Save to files
+storage.save_prompt_version_chain("test-prompt", versions)
+storage.save_causal_edges("test-prompt", edges)
+```
+
+**Trends Supported:**
+- **Improving:** Scores increase over time (linear + noise)
+- **Degrading:** Scores decrease over time (linear + noise)
+- **Oscillating:** Scores oscillate (sinusoidal + noise)
+
+**Change Types Generated:**
+- **structure:** Major rewrites (ratio < 0.5)
+- **length:** Significant length changes (>1.5x or <0.5x)
+- **wording:** Minor text changes
+
 ## Future Enhancements
 
 - **LLM Integration**: Replace heuristic engine and judge with LLM-powered versions
 - **Ensemble Strategies**: Generate and compare multiple improvement approaches
 - **Advanced Analytics**: Detailed performance metrics and trend analysis
+- **Temporal Visualization**: UI for version timelines and causal graphs
 - **Web Interface**: User-friendly frontend for prompt improvement
 - **API Rate Limiting**: Production-ready request throttling
 - **Caching Layer**: Performance optimization for frequent operations

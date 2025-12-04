@@ -1,7 +1,10 @@
-# Environment variables
-.env.local
+# Environment variables (NEVER commit these)
 .env
+.env.local
 .env.*.local
+*/.env
+backend/.env
+frontend/.env
 
 # Python
 __pycache__/

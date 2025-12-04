@@ -4,12 +4,15 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load .env from project root (not backend/.env)
+project_root = Path(__file__).parent.parent
+load_dotenv(project_root / '.env')
 
-# Database setup
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./auth_system.db")
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Database setup - Use AUTH_DATABASE_URL for authentication database
+AUTH_DATABASE_URL = os.getenv("AUTH_DATABASE_URL", "sqlite:///./auth_system.db")
+engine = create_engine(AUTH_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

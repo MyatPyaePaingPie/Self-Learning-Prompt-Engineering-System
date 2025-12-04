@@ -6,10 +6,29 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import timedelta, datetime
 import os
+import sys
+import logging
+from pathlib import Path
 from dotenv import load_dotenv
 
+# Add backend directory to path for relative imports
+backend_dir = Path(__file__).parent
+project_root = backend_dir.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Load .env from project root (not backend/.env)
+load_dotenv(project_root / '.env')
+
+# Initialize logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Now import from backend modules
 from database import get_db, User
 from auth import (
     authenticate_user, create_access_token, verify_token, create_user,
@@ -21,7 +40,20 @@ from auth import (
 )
 from crypto import encrypt_sensitive_data, decrypt_sensitive_data
 
-load_dotenv()
+# Import for security dashboard
+from packages.db.session import get_session
+from packages.db.crud import create_security_input_row, get_security_inputs
+from pydantic import BaseModel
+
+# Import for temporal analysis (Week 12)
+from packages.db.models import Prompt, PromptVersion, JudgeScore
+from temporal_analysis import (
+    detect_trend, detect_change_points, compute_statistics, 
+    compute_causal_hints, compute_score_velocity
+)
+import uuid
+import random
+import difflib
 
 app = FastAPI(
     title="Secure Authentication API",
@@ -195,6 +227,13 @@ class PromptEnhanceRequest(BaseModel):
     enhancement_type: str = Field(default="general", pattern="^(general|creative|technical|persuasive|clear)$")
     context: Optional[str] = Field(None, max_length=1000)
 
+class FeedbackRequest(BaseModel):
+    """Request model for user feedback on multi-agent results (Darwinian Evolution - Phase 1)"""
+    request_id: str = Field(..., min_length=1, max_length=100, description="Unique request ID")
+    user_choice: str = Field(..., pattern="^(original|single|multi)$", description="User's choice")
+    judge_winner: str = Field(..., description="Agent selected by judge")
+    agent_winner: str = Field(..., description="Agent to credit based on user choice")
+
 @app.post("/prompts/enhance")
 @limiter.limit("10/minute")
 async def enhance_prompt(
@@ -233,6 +272,71 @@ async def enhance_prompt(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Prompt enhancement failed"
         )
+
+@app.get("/api/prompts")
+async def get_user_prompts(
+    current_user: User = Depends(get_current_user),
+    limit: int = 50
+):
+    """Get authenticated user's prompts."""
+    try:
+        with get_session() as session:
+            prompts = session.query(Prompt).filter(
+                Prompt.user_id == str(current_user.id)
+            ).order_by(Prompt.created_at.desc()).limit(limit).all()
+            
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "id": str(p.id),
+                        "original_text": p.original_text,
+                        "created_at": p.created_at.isoformat(),
+                        "user_id": p.user_id
+                    }
+                    for p in prompts
+                ]
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tokens")
+async def get_user_token_history(
+    current_user: User = Depends(get_current_user),
+    limit: int = 100
+):
+    """
+    Get authenticated user's token usage history (Database-First Pattern 2025-12-04).
+    Returns all token records for the user across all prompts and versions.
+    """
+    try:
+        from packages.db.crud import get_token_usage_by_user
+        
+        with get_session() as session:
+            token_records = get_token_usage_by_user(session, str(current_user.id), limit=limit)
+            
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "id": str(record.id),
+                        "prompt_version_id": str(record.prompt_version_id),
+                        "prompt_tokens": record.prompt_tokens,
+                        "completion_tokens": record.completion_tokens,
+                        "total_tokens": record.total_tokens,
+                        "model": record.model,
+                        "cost_usd": record.cost_usd,
+                        "created_at": record.created_at.isoformat()
+                    }
+                    for record in token_records
+                ],
+                "total_records": len(token_records),
+                "total_tokens": sum(r.total_tokens for r in token_records),
+                "total_cost": sum(r.cost_usd for r in token_records)
+            }
+    except Exception as e:
+        logger.error(f"Failed to get token history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get token history: {str(e)}")
 
 @app.post("/prompts/save")
 @limiter.limit("20/minute")
@@ -278,6 +382,316 @@ async def get_user_prompts(current_user: User = Depends(get_current_user)):
             "user_id": current_user.id
         }
     }
+
+# Multi-Agent Enhancement Endpoints (Week 11)
+
+from packages.core.agent_registry import AgentRegistry
+from packages.core.agent_coordinator import AgentCoordinator
+from storage.file_storage import FileStorage
+
+# Singleton coordinator (uses registry internally)
+_multi_agent_coordinator = None
+# Singleton file storage (Week 11 - Phase 2)
+_file_storage = None
+
+def get_multi_agent_coordinator() -> AgentCoordinator:
+    """Get coordinator with default agents (syntax, structure, domain)"""
+    global _multi_agent_coordinator
+    
+    if not _multi_agent_coordinator:
+        _multi_agent_coordinator = AgentCoordinator()  # Uses default agents from registry
+    
+    return _multi_agent_coordinator
+
+def get_file_storage() -> FileStorage:
+    """Get file storage singleton"""
+    global _file_storage
+    
+    if not _file_storage:
+        # Initialize with storage directory
+        import os
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        _file_storage = FileStorage(base_dir=storage_dir)
+    
+    return _file_storage
+
+@app.post("/prompts/multi-agent-enhance")
+@limiter.limit("5/minute")  # Lower limit (3 LLM calls per request)
+async def multi_agent_enhance(
+    request: Request,
+    prompt_data: PromptEnhanceRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Enhance prompt using multi-agent collaboration (Week 11)."""
+    try:
+        # Get coordinator (uses registry internally)
+        coordinator = get_multi_agent_coordinator()
+        decision = await coordinator.coordinate(prompt_data.text)
+        
+        # Generate request ID for tracking (BEFORE database save)
+        request_id = str(uuid.uuid4())
+        
+        # SAVE PROMPT TO DATABASE WITH USER_ID AND REQUEST_ID
+        from packages.db.crud import create_prompt_row, create_version_row, create_judge_score_row, create_token_usage_row
+        from packages.core.judge import Scorecard
+        from packages.core.token_tracker import TokenUsage
+        from datetime import datetime
+        
+        with get_session() as session:
+            # Create prompt record with user_id and request_id
+            prompt = create_prompt_row(
+                session=session,
+                user_id=str(current_user.id),  # USER-SPECIFIC
+                original_text=prompt_data.text,
+                request_id=request_id  # For feedback linkage
+            )
+            
+            # Create version for original prompt
+            original_version = create_version_row(
+                session=session,
+                prompt_id=prompt.id,
+                version_no=1,
+                text=prompt_data.text,
+                explanation={"source": "user_input", "enhancement_type": prompt_data.enhancement_type},
+                source="user_input"
+            )
+            
+            # SAVE TOKEN USAGE FOR ORIGINAL PROMPT (Database-First Pattern 2025-12-04)
+            # Track original prompt tokens (estimate based on text)
+            from packages.core.token_tracker import TokenTracker
+            tracker = TokenTracker()
+            original_tokens = tracker.count_tokens(prompt_data.text)
+            original_token_usage = TokenUsage(
+                prompt_tokens=original_tokens,
+                completion_tokens=0,  # No completion for original (just the prompt itself)
+                total_tokens=original_tokens,
+                model="user_input",  # Source is user input
+                timestamp=datetime.now(),
+                cost_usd=0.0  # No cost for user input
+            )
+            create_token_usage_row(session, original_version.id, original_token_usage)
+            
+            # Create version for enhanced prompt
+            enhanced_version = create_version_row(
+                session=session,
+                prompt_id=prompt.id,
+                version_no=2,
+                text=decision.final_prompt,
+                explanation={
+                    "source": "multi_agent",
+                    "selected_agent": decision.selected_agent,
+                    "decision_rationale": decision.decision_rationale
+                },
+                source="multi_agent"
+            )
+            
+            # SAVE TOKEN USAGE FOR ENHANCED VERSION (Database-First Pattern 2025-12-04)
+            # Save token usage for enhanced version if available
+            if decision.token_usage and decision.total_tokens and decision.total_cost_usd:
+                # Create aggregate TokenUsage object for enhanced version
+                enhanced_token_usage = TokenUsage(
+                    prompt_tokens=decision.total_tokens // 2,  # Rough estimate (half prompt, half completion)
+                    completion_tokens=decision.total_tokens - (decision.total_tokens // 2),
+                    total_tokens=decision.total_tokens,
+                    model=decision.selected_agent,  # Track winning agent as "model"
+                    timestamp=datetime.now(),
+                    cost_usd=decision.total_cost_usd
+                )
+                create_token_usage_row(session, enhanced_version.id, enhanced_token_usage)
+            
+            session.commit()
+            prompt_id = str(prompt.id)
+        
+        # Add model info to response
+        agent_results_with_models = []
+        for result in decision.agent_results:
+            result_dict = result.dict()
+            
+            # Add model info from registry
+            metadata = AgentRegistry.get_metadata(result.agent_name)
+            if metadata:
+                result_dict["model_used"] = {
+                    "model_id": metadata.model_config.model_id,
+                    "display_name": metadata.model_config.display_name,
+                    "speed": metadata.model_config.speed.value,
+                    "cost": metadata.model_config.cost.value
+                }
+            agent_results_with_models.append(result_dict)
+        
+        # Database-First Pattern (2025-12-04):
+        # Prompts now saved to PostgreSQL with user_id
+        # CSV export is manual via POST /api/storage/export-multi-agent
+        
+        return {
+            "success": True,
+            "data": {
+                "request_id": request_id,
+                "prompt_id": prompt_id,  # NEW: Database ID
+                "original_text": prompt_data.text,
+                "enhanced_text": decision.final_prompt,
+                "selected_agent": decision.selected_agent,
+                "decision_rationale": decision.decision_rationale,
+                "agent_results": agent_results_with_models,
+                "vote_breakdown": decision.vote_breakdown,
+                "token_usage": decision.token_usage,  # Per-agent token usage
+                "total_cost_usd": decision.total_cost_usd,  # Total cost across all agents
+                "total_tokens": decision.total_tokens,  # Total tokens across all agents
+                "created_at": datetime.utcnow().isoformat(),
+                "user_id": current_user.id
+            }
+        }
+    except Exception as e:
+        logger.error(f"Multi-agent enhancement failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Multi-agent enhancement failed: {str(e)}"
+        )
+
+@app.post("/prompts/feedback")
+@limiter.limit("20/minute")  # Higher limit for feedback (lightweight operation)
+async def record_user_feedback(
+    request: Request,
+    feedback: FeedbackRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Record user feedback on multi-agent results (Darwinian Evolution - Phase 1).
+    
+    Database-First Pattern (2025-12-04):
+    - Saves feedback to PostgreSQL (not CSV)
+    - Links feedback to prompt via request_id
+    - User-specific feedback tracking
+    
+    This endpoint enables the system to learn from user preferences by tracking
+    which enhancement method (original, single-agent, or multi-agent) the user
+    found most effective. This data is used to:
+    - Calculate agent effectiveness over time
+    - Adjust agent weights in future decisions (Phase 2)
+    - Improve system performance through evolutionary learning
+    """
+    try:
+        # Validate inputs
+        if feedback.user_choice not in ["original", "single", "multi"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid user_choice. Must be 'original', 'single', or 'multi'"
+            )
+        
+        # Database-First Pattern: Save to PostgreSQL (not CSV)
+        from packages.db.crud import create_feedback_row, get_prompt_by_request_id
+        
+        with get_session() as session:
+            # Find prompt by request_id
+            prompt = get_prompt_by_request_id(session, feedback.request_id)
+            
+            if not prompt:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Request ID not found: {feedback.request_id}"
+                )
+            
+            # Verify prompt belongs to current user (security)
+            if prompt.user_id != str(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot submit feedback for another user's prompt"
+                )
+            
+            # Create feedback record in database
+            feedback_record = create_feedback_row(
+                session=session,
+                request_id=feedback.request_id,
+                user_id=str(current_user.id),
+                prompt_id=prompt.id,
+                user_choice=feedback.user_choice,
+                judge_winner=feedback.judge_winner,
+                agent_winner=feedback.agent_winner
+            )
+            
+            session.commit()
+        
+        return {
+            "success": True,
+            "message": "Feedback recorded successfully",
+            "data": {
+                "request_id": feedback.request_id,
+                "user_choice": feedback.user_choice,
+                "agent_winner": feedback.agent_winner,
+                "judge_correct": feedback.judge_winner == feedback.agent_winner
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to record feedback: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to record feedback: {str(e)}"
+        )
+
+@app.get("/prompts/available-agents")
+async def get_available_agents(current_user: User = Depends(get_current_user)):
+    """Get list of available agents and their model configurations."""
+    try:
+        agents = []
+        for agent_name in AgentRegistry.get_all_agents():
+            metadata = AgentRegistry.get_metadata(agent_name)
+            if metadata:
+                agents.append({
+                    "name": agent_name,
+                    "display_name": metadata.display_name,
+                    "description": metadata.description,
+                    "focus_areas": metadata.focus_areas,
+                    "model": {
+                        "model_id": metadata.model_config.model_id,
+                        "display_name": metadata.model_config.display_name,
+                        "speed": metadata.model_config.speed.value,
+                        "cost": metadata.model_config.cost.value,
+                        "use_case": metadata.model_config.use_case
+                    }
+                })
+        
+        return {
+            "success": True,
+            "data": {"agents": agents}
+        }
+    except Exception as e:
+        logger.error(f"Failed to get available agents: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get available agents"
+        )
+
+@app.get("/prompts/agent-effectiveness")
+async def get_agent_effectiveness(current_user: User = Depends(get_current_user)):
+    """
+    Get agent effectiveness statistics (Week 11 - Phase 2).
+    
+    Database-First Pattern (2025-12-04):
+    - Reads from user_feedback table in PostgreSQL
+    - No longer uses CSV files
+    - User-specific data only
+    """
+    try:
+        from packages.db.crud import get_agent_effectiveness_from_feedback
+        
+        with get_session() as session:
+            effectiveness = get_agent_effectiveness_from_feedback(
+                session=session,
+                user_id=str(current_user.id)
+            )
+        
+        return {
+            "success": True,
+            "data": effectiveness
+        }
+    except Exception as e:
+        logger.error(f"Failed to get agent effectiveness: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get agent effectiveness"
+        )
 
 def apply_prompt_enhancement(text: str, enhancement_type: str, context: Optional[str] = None) -> str:
     """Apply prompt enhancement using structured template approach."""
@@ -509,6 +923,559 @@ async def get_account_status(current_user: User = Depends(get_current_user)):
         "last_password_change": current_user.last_password_change,
         "two_factor_enabled": current_user.two_factor_enabled
     }
+
+# Security Dashboard Endpoints
+
+class SecurityInputIn(BaseModel):
+    inputText: str
+    riskScore: float
+    label: str
+    isBlocked: bool
+    analysisMetadata: dict | None = None
+
+class SecurityInputResponse(BaseModel):
+    id: str
+    userId: str
+    inputText: str
+    riskScore: float
+    label: str
+    isBlocked: bool
+    analysisMetadata: dict | None
+    createdAt: str
+
+@app.post("/v1/security/inputs", response_model=SecurityInputResponse)
+async def log_security_input(
+    payload: SecurityInputIn,
+    current_user: User = Depends(get_current_user)
+):
+    """Log a security input with risk assessment (authenticated)"""
+    try:
+        with get_session() as s:
+            security_input = create_security_input_row(
+                s,
+                str(current_user.id),  # Use authenticated user ID
+                payload.inputText,
+                payload.riskScore,
+                payload.label,
+                payload.isBlocked,
+                payload.analysisMetadata
+            )
+            s.commit()
+            
+            return SecurityInputResponse(
+                id=str(security_input.id),
+                userId=str(current_user.id),
+                inputText=security_input.input_text,
+                riskScore=security_input.risk_score,
+                label=security_input.label,
+                isBlocked=security_input.is_blocked,
+                analysisMetadata=security_input.analysis_metadata,
+                createdAt=security_input.created_at.isoformat()
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/v1/security/inputs")
+async def get_security_inputs_endpoint(
+    limit: int = 100,
+    filter_label: str | None = None,
+    filter_blocked: bool | None = None,
+    filter_high_risk: bool | None = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get security inputs with optional filtering (authenticated)"""
+    try:
+        with get_session() as s:
+            inputs = get_security_inputs(
+                s,
+                limit=limit,
+                filter_label=filter_label,
+                filter_blocked=filter_blocked,
+                filter_high_risk=filter_high_risk
+            )
+            
+            return [
+                {
+                    "id": str(input.id),
+                    "userId": input.user_id,
+                    "inputText": input.input_text,
+                    "riskScore": input.risk_score,
+                    "label": input.label,
+                    "isBlocked": input.is_blocked,
+                    "analysisMetadata": input.analysis_metadata,
+                    "createdAt": input.created_at.isoformat()
+                }
+                for input in inputs
+            ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# TEMPORAL ANALYSIS ENDPOINTS (Week 12)
+# ============================================================================
+
+class SyntheticDataRequest(BaseModel):
+    prompt_id: str
+    days: int = 30
+    versions_per_day: int = 2
+
+@app.get("/api/temporal/timeline")
+async def get_temporal_timeline(
+    prompt_id: str,
+    start: str,
+    end: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get temporal timeline of prompt versions with scores.
+    
+    Args:
+        prompt_id: UUID of the prompt
+        start: Start date (ISO 8601 format)
+        end: End date (ISO 8601 format)
+        
+    Returns:
+        List of tuples: [(timestamp, score, version_id, change_type), ...]
+    """
+    try:
+        # Parse dates
+        start_date = datetime.fromisoformat(start.replace('Z', '+00:00'))
+        end_date = datetime.fromisoformat(end.replace('Z', '+00:00'))
+        
+        # Query database for versions in time range
+        with get_session() as session:
+            # SECURITY: Verify prompt belongs to current user
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(prompt_id),
+                Prompt.user_id == str(current_user.id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+            
+            versions = session.query(PromptVersion).filter(
+                PromptVersion.prompt_id == uuid.UUID(prompt_id),
+                PromptVersion.created_at >= start_date,
+                PromptVersion.created_at <= end_date
+            ).order_by(PromptVersion.created_at).all()
+            
+            if not versions:
+                return []
+            
+            # Get judge scores for each version
+            timeline = []
+            for version in versions:
+                judge_score = session.query(JudgeScore).filter(
+                    JudgeScore.prompt_version_id == version.id
+                ).first()
+                
+                if judge_score:
+                    # Calculate average score
+                    avg_score = (
+                        judge_score.clarity + 
+                        judge_score.specificity + 
+                        judge_score.actionability + 
+                        judge_score.structure + 
+                        judge_score.context_use
+                    ) / 5.0
+                    
+                    timeline.append({
+                        "timestamp": version.created_at.isoformat(),
+                        "score": avg_score,
+                        "version_id": str(version.id),
+                        "change_type": version.change_type
+                    })
+            
+            return timeline
+            
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/temporal/statistics")
+async def get_temporal_statistics(
+    prompt_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get temporal statistics for prompt evolution.
+    
+    Args:
+        prompt_id: UUID of the prompt
+        
+    Returns:
+        Dict with trend, avg_score, score_std, total_versions
+    """
+    try:
+        with get_session() as session:
+            # SECURITY: Verify prompt belongs to current user
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(prompt_id),
+                Prompt.user_id == str(current_user.id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+            
+            # Query all versions for this prompt
+            versions = session.query(PromptVersion).filter(
+                PromptVersion.prompt_id == uuid.UUID(prompt_id)
+            ).order_by(PromptVersion.created_at).all()
+            
+            if not versions:
+                raise HTTPException(status_code=404, detail="No versions found for this prompt")
+            
+            # Get scores and timestamps
+            scores = []
+            timestamps = []
+            
+            for version in versions:
+                judge_score = session.query(JudgeScore).filter(
+                    JudgeScore.prompt_version_id == version.id
+                ).first()
+                
+                if judge_score:
+                    avg_score = (
+                        judge_score.clarity + 
+                        judge_score.specificity + 
+                        judge_score.actionability + 
+                        judge_score.structure + 
+                        judge_score.context_use
+                    ) / 5.0
+                    
+                    scores.append(avg_score)
+                    timestamps.append(version.created_at)
+            
+            # Compute statistics
+            stats = compute_statistics(scores)
+            trend = detect_trend(scores, timestamps)
+            
+            return {
+                "trend": trend,
+                "avg_score": stats["avg"],
+                "score_std": stats["std"],
+                "total_versions": len(versions),
+                "min_score": stats["min"],
+                "max_score": stats["max"]
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/temporal/causal-hints")
+async def get_causal_hints(
+    prompt_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get causal hints showing correlation between change types and score deltas.
+    
+    Args:
+        prompt_id: UUID of the prompt
+        
+    Returns:
+        List of dicts: [{"change_type": str, "avg_score_delta": float, "occurrence_count": int}, ...]
+    """
+    try:
+        with get_session() as session:
+            # SECURITY: Verify prompt belongs to current user
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(prompt_id),
+                Prompt.user_id == str(current_user.id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+            
+            # Query all versions for this prompt
+            versions = session.query(PromptVersion).filter(
+                PromptVersion.prompt_id == uuid.UUID(prompt_id)
+            ).order_by(PromptVersion.created_at).all()
+            
+            if not versions:
+                raise HTTPException(status_code=404, detail="No versions found for this prompt")
+            
+            # Build edges (parent -> child transitions)
+            edges = []
+            version_scores = {}
+            
+            # First pass: Get all scores
+            for version in versions:
+                judge_score = session.query(JudgeScore).filter(
+                    JudgeScore.prompt_version_id == version.id
+                ).first()
+                
+                if judge_score:
+                    avg_score = (
+                        judge_score.clarity + 
+                        judge_score.specificity + 
+                        judge_score.actionability + 
+                        judge_score.structure + 
+                        judge_score.context_use
+                    ) / 5.0
+                    version_scores[version.id] = avg_score
+            
+            # Second pass: Build edges
+            for version in versions:
+                if version.parent_version_id and version.parent_version_id in version_scores:
+                    parent_score = version_scores[version.parent_version_id]
+                    child_score = version_scores.get(version.id)
+                    
+                    if child_score is not None:
+                        score_delta = child_score - parent_score
+                        edges.append((version.change_type, score_delta))
+            
+            # Compute causal hints
+            hints = compute_causal_hints(edges)
+            
+            return hints
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/temporal/generate-synthetic")
+async def generate_synthetic_history(
+    request: SyntheticDataRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate synthetic prompt version history for testing.
+    
+    Args:
+        request: SyntheticDataRequest with prompt_id, days, versions_per_day
+        
+    Returns:
+        Dict with created_versions count
+    """
+    try:
+        with get_session() as session:
+            # SECURITY: Verify prompt exists and belongs to current user
+            prompt = session.query(Prompt).filter(
+                Prompt.id == uuid.UUID(request.prompt_id),
+                Prompt.user_id == str(current_user.id)
+            ).first()
+            
+            if not prompt:
+                raise HTTPException(status_code=404, detail="Prompt not found or access denied")
+            
+            # Generate synthetic versions
+            total_versions = request.days * request.versions_per_day
+            created_count = 0
+            previous_version_id = None
+            previous_text = prompt.original_text
+            
+            # Start with base score and trend upward
+            base_score = 60.0
+            score_increment = 20.0 / total_versions  # Increase 20 points over time
+            
+            change_types = ["structure", "wording", "length", "other"]
+            
+            for day in range(request.days):
+                for version_num in range(request.versions_per_day):
+                    # Calculate timestamp (spread across days)
+                    hours_offset = day * 24 + (version_num * 24 / request.versions_per_day)
+                    version_date = datetime.utcnow() - timedelta(days=request.days - day, hours=hours_offset)
+                    
+                    # Generate version text (simple modification)
+                    version_text = f"{previous_text} [v{created_count + 1}]"
+                    
+                    # Compute change type and magnitude
+                    change_type = random.choice(change_types)
+                    change_magnitude = random.uniform(0.1, 0.5)
+                    
+                    # Create version
+                    new_version = PromptVersion(
+                        id=uuid.uuid4(),
+                        prompt_id=uuid.UUID(request.prompt_id),
+                        version_no=created_count + 1,
+                        text=version_text,
+                        explanation={"synthetic": True, "generated_at": datetime.utcnow().isoformat()},
+                        source="synthetic_generator",
+                        created_at=version_date,
+                        parent_version_id=previous_version_id,
+                        change_type=change_type,
+                        change_magnitude=change_magnitude
+                    )
+                    session.add(new_version)
+                    
+                    # Create judge score (trending upward with some noise)
+                    current_score = base_score + (created_count * score_increment) + random.uniform(-5, 5)
+                    current_score = max(0, min(100, current_score))  # Clamp to 0-100
+                    
+                    judge_score = JudgeScore(
+                        id=uuid.uuid4(),
+                        prompt_version_id=new_version.id,
+                        clarity=current_score,
+                        specificity=current_score,
+                        actionability=current_score,
+                        structure=current_score,
+                        context_use=current_score,
+                        feedback={"synthetic": True},
+                        created_at=version_date
+                    )
+                    session.add(judge_score)
+                    
+                    previous_version_id = new_version.id
+                    previous_text = version_text
+                    created_count += 1
+            
+            session.commit()
+            
+            return {
+                "created_versions": created_count,
+                "prompt_id": request.prompt_id,
+                "days": request.days,
+                "versions_per_day": request.versions_per_day
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# STORAGE CONSOLIDATION PHASE 3: Export Endpoints
+# Added: 2025-12-04
+# Purpose: Manual CSV export from database (database-first pattern)
+# ============================================================================
+
+@app.post("/api/storage/export-multi-agent")
+@limiter.limit("10/minute")
+async def export_multi_agent_csv(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Export multi-agent results from database to CSV.
+    
+    Database-First Pattern:
+    - Reads from PostgreSQL (single source of truth)
+    - Generates CSV for analysis/backup
+    - Manual export (not automatic)
+    """
+    try:
+        from storage.file_storage import FileStorage
+        import os
+        
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        storage = FileStorage(base_dir=storage_dir, db_session=session)
+        
+        csv_path = storage.export_multi_agent_results_to_csv()
+        
+        # Count records
+        from packages.db.crud import get_all_prompt_versions
+        versions = get_all_prompt_versions(session, limit=1000)
+        by_prompt = {}
+        for v in versions:
+            if v.prompt_id not in by_prompt:
+                by_prompt[v.prompt_id] = []
+        
+        return {
+            "success": True,
+            "csv_path": csv_path,
+            "records": len(by_prompt)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+@app.post("/api/storage/export-temporal")
+@limiter.limit("10/minute")
+async def export_temporal_csv(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Export temporal version chains from database to CSV.
+    
+    Database-First Pattern:
+    - Reads from PostgreSQL (single source of truth)
+    - Generates CSV for analysis/backup
+    - Manual export (not automatic)
+    """
+    try:
+        from storage.file_storage import FileStorage
+        import os
+        
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        storage = FileStorage(base_dir=storage_dir, db_session=session)
+        
+        csv_path = storage.export_temporal_versions_to_csv()
+        
+        # Count records
+        from packages.db.crud import get_all_prompt_versions
+        versions = get_all_prompt_versions(session, limit=1000)
+        
+        return {
+            "success": True,
+            "csv_path": csv_path,
+            "records": len(versions)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+@app.post("/api/storage/export-all")
+@limiter.limit("5/minute")
+async def export_all_csv(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Export all data from database to CSV files.
+    
+    Database-First Pattern:
+    - Exports multi-agent + temporal data
+    - Single endpoint for bulk export
+    """
+    try:
+        from storage.file_storage import FileStorage
+        import os
+        
+        storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "storage")
+        storage = FileStorage(base_dir=storage_dir, db_session=session)
+        
+        paths = storage.export_all_to_csv()
+        
+        return {
+            "success": True,
+            "csv_paths": paths
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+@app.get("/api/agents/effectiveness")
+@limiter.limit("20/minute")
+async def get_agent_effectiveness(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Query agent effectiveness from database (not CSV).
+    
+    Database-First Pattern:
+    - Queries PostgreSQL directly
+    - No CSV reads
+    """
+    try:
+        from packages.db.crud import get_agent_effectiveness_stats
+        
+        effectiveness = get_agent_effectiveness_stats(session)
+        
+        return {
+            "success": True,
+            "effectiveness": effectiveness
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -10,8 +10,11 @@ import os
 import re
 import secrets
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load .env from project root (not backend/.env)
+project_root = Path(__file__).parent.parent
+load_dotenv(project_root / '.env')
 
 # Security configuration
 SECRET_KEY = os.getenv("SECRET_KEY")
