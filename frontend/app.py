@@ -142,36 +142,25 @@ def show_dashboard():
         
         # Navigation
         st.subheader("🧭 Navigation")
-        if st.button("🚀 Single-Agent Enhancement", key="nav_prompts"):
-            st.session_state.current_page = "prompts"
-            st.rerun()
-        
-        if st.button("🤖 Multi-Agent Enhancement", key="nav_multi_agent"):
-            st.session_state.current_page = "multi_agent"
-            st.rerun()
-        
-        if st.button("📈 Agent Effectiveness", key="nav_effectiveness"):
-            st.session_state.current_page = "agent_effectiveness"
-            st.rerun()
             
-        if st.button("📊 Dashboard", key="nav_dashboard"):
+        if st.button("📊 Dashboard", key="nav_dashboard", use_container_width=True):
             st.session_state.current_page = "dashboard"
             st.rerun()
         
-        if st.button("💰 Token Analytics", key="nav_tokens"):
+        if st.button("📈 Agent Effectiveness", key="nav_effectiveness", use_container_width=True):
+            st.session_state.current_page = "agent_effectiveness"
+            st.rerun()
+        
+        if st.button("💰 Token Analytics", key="nav_tokens", use_container_width=True):
             st.session_state.current_page = "token_analytics"
             st.rerun()
         
-        if st.button("🔒 Security Dashboard", key="nav_security"):
+        if st.button("🔒 Security Dashboard", key="nav_security", use_container_width=True):
             st.session_state.current_page = "security_dashboard"
             st.rerun()
         
-        if st.button("⏱️ Temporal Analysis", key="nav_temporal"):
+        if st.button("⏱️ Temporal Analysis", key="nav_temporal", use_container_width=True):
             st.session_state.current_page = "temporal_analysis"
-            st.rerun()
-        
-        if st.button("📊 Export Data (CSV)", key="nav_export"):
-            st.session_state.current_page = "export_data"
             st.rerun()
             
         if st.button("🔧 API Testing", key="nav_api"):
@@ -190,16 +179,8 @@ def show_dashboard():
             logout()
     
     # Main content based on current page
-    if st.session_state.current_page == "prompts":
-        show_prompt_enhancement()
-    elif st.session_state.current_page == "multi_agent":
-        show_multi_agent_enhancement()
-    elif st.session_state.current_page == "agent_effectiveness":
+    if st.session_state.current_page == "agent_effectiveness":
         show_agent_effectiveness()
-    elif st.session_state.current_page == "export_data":
-        show_export_data()
-    elif st.session_state.current_page == "api_test":
-        show_api_testing()
     elif st.session_state.current_page == "token_analytics":
         show_token_analytics()
     elif st.session_state.current_page == "security_dashboard":
@@ -207,7 +188,8 @@ def show_dashboard():
     elif st.session_state.current_page == "temporal_analysis":
         show_temporal_analysis()
     else:
-        show_dashboard_overview()
+        # Dashboard is now the main enhancement page
+        show_prompt_enhancement()
 
 def show_dashboard_overview():
     """Show the main dashboard overview."""
@@ -234,7 +216,7 @@ def show_dashboard_overview():
     
     with col1:
         if st.button("🚀 Start Prompt Enhancement", type="primary"):
-            st.session_state.current_page = "prompts"
+            st.session_state.current_page = "dashboard"
             st.rerun()
             
         if st.button("🔧 Test API Endpoints"):
@@ -248,7 +230,11 @@ def show_dashboard_overview():
 def show_prompt_enhancement():
     """Show the prompt enhancement interface."""
     st.title("🤖 Prompt Enhancement & Comparison")
-    st.markdown("Compare enhancement methods and see which produces best results")
+    st.markdown("**The system will:**")
+    st.markdown("1. ✨ Enhance your prompt using different methods")
+    st.markdown("2. 🚀 **Execute all prompts** (original + enhanced versions) with an LLM")
+    st.markdown("3. 📊 Compare the actual outputs side-by-side")
+    st.markdown("4. 🏆 Declare a winner based on quality scores")
     
     # Enhancement mode selector - Default to Compare All to showcase multi-agent value
     enhancement_mode = st.radio(
@@ -338,7 +324,7 @@ def show_three_way_comparison(original_prompt: str, context: str = ""):
     
     tracker = TokenTracker()
     
-    with st.spinner("🤖 Running comparison (Original + Single + Multi)..."):
+    with st.spinner("🤖 Running full comparison (enhancing prompts + executing all 3 with LLM)..."):
         # Step 1: Single-Agent Enhancement (existing pattern)
         try:
             single_enhanced = fallback_to_template(original_prompt).text
@@ -467,10 +453,10 @@ def display_three_way_results(
         # Score
         st.metric("Quality Score", f"{original_score.total:.1f}/50", help="Judge evaluation")
         
-        # Output preview
-        st.write("**Output Preview:**")
+        # LLM Output preview
+        st.write("**LLM Response (preview):**")
         output_preview = original_output[:200] + ("..." if len(original_output) > 200 else "")
-        st.text_area("Output", value=output_preview, height=100, disabled=True, key="orig_output_comp", label_visibility="hidden")
+        st.text_area("LLM Output Preview", value=output_preview, height=100, disabled=True, key="orig_output_comp", label_visibility="hidden")
         
         # Cost
         total_cost = original_usage.cost_usd + original_judge_usage.cost_usd
@@ -489,10 +475,10 @@ def display_three_way_results(
         improvement = single_score.total - original_score.total
         st.metric("Quality Score", f"{single_score.total:.1f}/50", f"+{improvement:.1f}", help="Judge evaluation")
         
-        # Output preview
-        st.write("**Output Preview:**")
+        # LLM Output preview
+        st.write("**LLM Response (preview):**")
         output_preview = single_output[:200] + ("..." if len(single_output) > 200 else "")
-        st.text_area("Output", value=output_preview, height=100, disabled=True, key="single_output_comp", label_visibility="hidden")
+        st.text_area("LLM Output Preview", value=output_preview, height=100, disabled=True, key="single_output_comp", label_visibility="hidden")
         
         # Cost
         total_cost = single_usage.cost_usd + single_judge_usage.cost_usd
@@ -518,10 +504,10 @@ def display_three_way_results(
         else:
             st.metric("Quality Score", f"{multi_score.total:.1f}/50", f"+{improvement_vs_original:.1f}")
         
-        # Output preview
-        st.write("**Output Preview:**")
+        # LLM Output preview
+        st.write("**LLM Response (preview):**")
         output_preview = multi_output[:200] + ("..." if len(multi_output) > 200 else "")
-        st.text_area("Output", value=output_preview, height=100, disabled=True, key="multi_output_comp", label_visibility="hidden")
+        st.text_area("LLM Output Preview", value=output_preview, height=100, disabled=True, key="multi_output_comp", label_visibility="hidden")
         
         # Cost
         total_cost = multi_usage.cost_usd + multi_judge_usage.cost_usd
@@ -537,6 +523,30 @@ def display_three_way_results(
             vote_breakdown = multi_metadata['vote_breakdown']
             for agent, score in vote_breakdown.items():
                 st.write(f"- {agent.title()}: {score:.2f}")
+    
+    # Full LLM execution outputs prominently displayed
+    st.divider()
+    st.subheader("🚀 LLM Execution Results - Side by Side Comparison")
+    st.markdown("**These are the actual responses from executing each prompt with an LLM:**")
+    st.caption("All three prompts were sent to the LLM and generated these responses")
+    
+    # Three-column layout for outputs
+    output_col1, output_col2, output_col3 = st.columns(3)
+    
+    with output_col1:
+        st.markdown("### 📝 Original Prompt → LLM Output")
+        st.caption("What the LLM generated from your original prompt")
+        st.text_area("Original LLM Response", value=original_output, height=400, disabled=True, key="full_orig_top", label_visibility="hidden")
+    
+    with output_col2:
+        st.markdown("### 🔧 Single-Agent Prompt → LLM Output")
+        st.caption("What the LLM generated from the template-enhanced prompt")
+        st.text_area("Single-Agent LLM Response", value=single_output, height=400, disabled=True, key="full_single_top", label_visibility="hidden")
+    
+    with output_col3:
+        st.markdown("### 🤖 Multi-Agent Prompt → LLM Output")
+        st.caption("What the LLM generated from the multi-agent enhanced prompt")
+        st.text_area("Multi-Agent LLM Response", value=multi_output, height=400, disabled=True, key="full_multi_top", label_visibility="hidden")
     
     # Winner declaration
     st.divider()
@@ -639,21 +649,6 @@ def display_three_way_results(
         else:
             st.info("💡 Single-Agent is more cost-effective")
     
-    # Full outputs (expandable)
-    st.divider()
-    st.subheader("📄 Full Outputs")
-    
-    output_tabs = st.tabs(["Original Output", "Single-Agent Output", "Multi-Agent Output"])
-    
-    with output_tabs[0]:
-        st.text_area("Full output from original prompt:", value=original_output, height=300, disabled=True, key="full_orig", label_visibility="hidden")
-    
-    with output_tabs[1]:
-        st.text_area("Full output from single-agent enhanced prompt:", value=single_output, height=300, disabled=True, key="full_single", label_visibility="hidden")
-    
-    with output_tabs[2]:
-        st.text_area("Full output from multi-agent enhanced prompt:", value=multi_output, height=300, disabled=True, key="full_multi", label_visibility="hidden")
-
 def show_multi_agent_only(prompt_text: str):
     """Multi-Agent enhancement only (no comparison)"""
     
@@ -1060,9 +1055,9 @@ def show_temporal_analysis():
             prompts = session.query(Prompt).order_by(Prompt.created_at.desc()).limit(50).all()
             
             if not prompts:
-                st.warning("⚠️ No prompts found. Create a prompt first using Single-Agent or Multi-Agent Enhancement.")
-                if st.button("← Go to Prompt Enhancement"):
-                    st.session_state.current_page = "prompts"
+                st.warning("⚠️ No prompts found. Create a prompt first using the Dashboard Prompt Enhancement.")
+                if st.button("← Go to Dashboard"):
+                    st.session_state.current_page = "dashboard"
                     st.rerun()
                 return
             
@@ -1280,9 +1275,9 @@ def show_token_analytics():
     
     # Check for data
     if 'latest_multi_agent_result' not in st.session_state:
-        st.warning("⚠️ No multi-agent data available. Please run a multi-agent enhancement first!")
-        if st.button("← Go to Multi-Agent Enhancement"):
-            st.session_state.current_page = "multi_agent"
+        st.warning("⚠️ No multi-agent data available. Please run a prompt enhancement from the Dashboard first!")
+        if st.button("← Go to Dashboard"):
+            st.session_state.current_page = "dashboard"
             st.rerun()
         st.stop()
     
