@@ -67,3 +67,14 @@ class UserFeedback(Base):
     agent_winner: Mapped[str]  # Agent to credit based on user choice (e.g., "none", "template", "syntax")
     judge_correct: Mapped[bool]  # True if judge_winner == agent_winner
     created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)
+
+class TokenUsageRecord(Base):
+    __tablename__ = "token_usage"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    prompt_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prompt_versions.id", ondelete="CASCADE"))
+    prompt_tokens: Mapped[int]
+    completion_tokens: Mapped[int]
+    total_tokens: Mapped[int]
+    model: Mapped[str]  # e.g., "llama-3.3-70b-versatile"
+    cost_usd: Mapped[float]
+    created_at: Mapped[dt.datetime] = mapped_column(default=dt.datetime.utcnow)

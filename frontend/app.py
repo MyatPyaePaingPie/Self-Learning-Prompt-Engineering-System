@@ -1112,12 +1112,12 @@ def show_temporal_analysis():
         
         prompts_data = response.json()
         if not prompts_data.get("success") or not prompts_data.get("data"):
-            st.warning("⚠️ No prompts found. Create a prompt first using the Dashboard Prompt Enhancement.")
-            if st.button("← Go to Dashboard"):
-                st.session_state.current_page = "dashboard"
-                st.rerun()
-            return
-        
+                st.warning("⚠️ No prompts found. Create a prompt first using the Dashboard Prompt Enhancement.")
+                if st.button("← Go to Dashboard"):
+                    st.session_state.current_page = "dashboard"
+                    st.rerun()
+                return
+            
         prompts = prompts_data["data"]
         
         # Prompt selector
@@ -1331,55 +1331,73 @@ def main():
             st.markdown("3. Clear your browser cache")
 
 def show_token_analytics():
-    """Show token usage and cost analytics with multi-agent breakdown."""
+    """Show token usage and cost analytics from database (Database-First Pattern 2025-12-04)."""
     st.title("💰 Token Usage & Cost Analytics")
     st.markdown("Real-time token tracking across all AI agents with model-specific pricing")
     
-    # Check for data
-    if 'latest_multi_agent_result' not in st.session_state:
-        st.warning("⚠️ No multi-agent data available. Please run a prompt enhancement from the Dashboard first!")
-        if st.button("← Go to Dashboard"):
-            st.session_state.current_page = "dashboard"
-            st.rerun()
-        st.stop()
+    # Query token history from database (not session state)
+    API_BASE = "http://localhost:8001"
     
-    data = st.session_state['latest_multi_agent_result']
-    
-    # Extract token usage
-    token_usage = data.get('token_usage', {})
-    total_cost = data.get('total_cost_usd', 0)
-    total_tokens = data.get('total_tokens', 0)
-    
-    # Display aggregate metrics
-    st.subheader("📊 Multi-Agent Token Usage Summary")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Tokens", f"{total_tokens:,}" if total_tokens else "N/A")
-    
-    with col2:
-        st.metric("Total Cost", f"${total_cost:.6f}" if total_cost else "N/A")
-    
-    with col3:
-        agents_used = len(token_usage) if token_usage else 0
-        st.metric("Agents Used", agents_used)
-    
-    with col4:
-        # Calculate cost per 1K tokens
-        cost_per_1k = (total_cost / total_tokens * 1000) if total_tokens > 0 else 0
-        st.metric("Cost per 1K Tokens", f"${cost_per_1k:.4f}" if cost_per_1k > 0 else "N/A")
-    
-    st.divider()
-    
-    # Per-agent breakdown
-    st.subheader("🤖 Per-Agent Token Breakdown")
-    
-    if token_usage:
+    try:
+        response = requests.get(
+            f"{API_BASE}/api/tokens?limit=100",
+            headers={"Authorization": f"Bearer {st.session_state.access_token}"}
+        )
+        
+        if response.status_code != 200:
+            st.error(f"❌ Failed to load token history: {response.status_code}")
+            if st.button("← Go to Dashboard"):
+                st.session_state.current_page = "dashboard"
+                st.rerun()
+            return
+        
+        result = response.json()
+        
+        if not result.get("success"):
+            st.error("❌ Failed to load token history")
+            return
+        
+        token_records = result["data"]
+        total_tokens_all = result.get("total_tokens", 0)
+        total_cost_all = result.get("total_cost", 0)
+        
+        if not token_records:
+            st.info("📊 No token history yet. Enhance a prompt to start tracking!")
+            if st.button("← Go to Dashboard"):
+                st.session_state.current_page = "dashboard"
+                st.rerun()
+            return
+        
+        # Display aggregate metrics
+        st.subheader("📊 Token Usage Summary (All Time)")
+        
+        # Display aggregate metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Tokens", f"{total_tokens_all:,}")
+        
+        with col2:
+            st.metric("Total Cost", f"${total_cost_all:.6f}")
+        
+        with col3:
+            st.metric("Total Requests", len(token_records))
+        
+        with col4:
+            # Calculate average cost per request
+            avg_cost = total_cost_all / len(token_records) if token_records else 0
+            st.metric("Avg Cost/Request", f"${avg_cost:.6f}")
+        
+        st.divider()
+        
+        # Token history table
+        st.subheader("📊 Token Usage History")
+        
         import pandas as pd
         
-        breakdown_data = {
-            "Agent": [],
+        # Prepare data for table
+        table_data = {
+            "Date": [],
             "Model": [],
             "Prompt Tokens": [],
             "Completion Tokens": [],
@@ -1387,126 +1405,83 @@ def show_token_analytics():
             "Cost (USD)": []
         }
         
-        for agent_name, usage in token_usage.items():
-            breakdown_data["Agent"].append(agent_name.capitalize())
-            breakdown_data["Model"].append(usage.get('model', 'N/A'))
-            breakdown_data["Prompt Tokens"].append(f"{usage.get('prompt_tokens', 0):,}")
-            breakdown_data["Completion Tokens"].append(f"{usage.get('completion_tokens', 0):,}")
-            breakdown_data["Total Tokens"].append(f"{usage.get('total_tokens', 0):,}")
-            breakdown_data["Cost (USD)"].append(f"${usage.get('cost_usd', 0):.6f}")
+        for record in token_records:
+            # Format timestamp
+            try:
+                timestamp = datetime.fromisoformat(record["created_at"])
+                formatted_date = timestamp.strftime("%Y-%m-%d %H:%M")
+            except:
+                formatted_date = record["created_at"][:16]
+            
+            table_data["Date"].append(formatted_date)
+            table_data["Model"].append(record["model"])
+            table_data["Prompt Tokens"].append(record["prompt_tokens"])
+            table_data["Completion Tokens"].append(record["completion_tokens"])
+            table_data["Total Tokens"].append(record["total_tokens"])
+            table_data["Cost (USD)"].append(f"${record['cost_usd']:.6f}")
         
-        df = pd.DataFrame(breakdown_data)
+        df = pd.DataFrame(table_data)
         st.dataframe(df, use_container_width=True, hide_index=True)
         
-        # Token distribution pie chart
-        st.subheader("📊 Token Distribution by Agent")
+        # Token usage over time chart
+        st.subheader("📈 Token Usage Over Time")
         
-        import plotly.graph_objects as go
+        import plotly.express as px
         
-        agent_names = []
-        agent_tokens = []
-        agent_colors = {
-            'syntax': '#667eea',
-            'structure': '#764ba2',
-            'domain': '#f093fb'
-        }
+        # Convert for plotly
+        chart_df = pd.DataFrame(token_records)
+        chart_df['created_at'] = pd.to_datetime(chart_df['created_at'])
+        chart_df = chart_df.sort_values('created_at')
         
-        for agent_name, usage in token_usage.items():
-            agent_names.append(agent_name.capitalize())
-            agent_tokens.append(usage.get('total_tokens', 0))
-        
-        fig = go.Figure(data=[go.Pie(
-            labels=agent_names,
-            values=agent_tokens,
-            marker=dict(colors=[agent_colors.get(n.lower(), '#cccccc') for n in agent_names]),
-            textinfo='label+percent',
-            hovertemplate='<b>%{label}</b><br>Tokens: %{value:,}<br>Percentage: %{percent}<extra></extra>'
-        )])
+        fig = px.line(
+            chart_df,
+            x='created_at',
+            y='total_tokens',
+            title='Token Usage Timeline',
+            labels={'total_tokens': 'Total Tokens', 'created_at': 'Date'},
+            markers=True
+        )
         
         fig.update_layout(
-            title="Token Usage Distribution",
-            height=400
+            hovermode='x unified',
+            xaxis_title="Date",
+            yaxis_title="Total Tokens"
         )
         
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No per-agent token usage data available")
-    
-    st.divider()
-    
-    # Cost comparison
-    st.subheader("💸 Cost Comparison & Savings")
-    
-    if token_usage and total_cost:
-        # Calculate hypothetical cost with all 70B models
-        avg_70b_price_per_token = (0.00000059 + 0.00000079) / 2  # Average of input+output
-        all_70b_cost = total_tokens * avg_70b_price_per_token
         
-        savings = all_70b_cost - total_cost
-        savings_percent = (savings / all_70b_cost * 100) if all_70b_cost > 0 else 0
+        # Model breakdown
+        st.subheader("🤖 Usage by Model")
         
-        col1, col2, col3 = st.columns(3)
+        model_stats = {}
+        for record in token_records:
+            model = record["model"]
+            if model not in model_stats:
+                model_stats[model] = {"count": 0, "tokens": 0, "cost": 0.0}
+            model_stats[model]["count"] += 1
+            model_stats[model]["tokens"] += record["total_tokens"]
+            model_stats[model]["cost"] += record["cost_usd"]
         
-        with col1:
-            st.metric(
-                "All 70B Models Cost",
-                f"${all_70b_cost:.6f}",
-                help="Cost if all agents used Llama 3.3 70B model"
-            )
-        
-        with col2:
-            st.metric(
-                "Optimized Cost",
-                f"${total_cost:.6f}",
-                delta=f"-${savings:.6f}",
-                delta_color="inverse",
-                help="Actual cost with optimized model assignment"
-            )
-        
-        with col3:
-            st.metric(
-                "Cost Savings",
-                f"{savings_percent:.1f}%",
-                delta=f"${savings:.6f} saved",
-                help="Percentage saved by using optimized model assignment"
-            )
-        
-        # Savings chart
-        import plotly.graph_objects as go
-        
-        fig = go.Figure(data=[
-            go.Bar(
-                name='All 70B Models',
-                x=['Cost Comparison'],
-                y=[all_70b_cost * 1000000],  # Convert to per million for better visibility
-                marker_color='#ef4444',
-                text=[f"${all_70b_cost * 1000000:.2f} per 1M tokens"],
-                textposition='auto'
-            ),
-            go.Bar(
-                name='Optimized Assignment',
-                x=['Cost Comparison'],
-                y=[total_cost * 1000000],
-                marker_color='#10b981',
-                text=[f"${total_cost * 1000000:.2f} per 1M tokens"],
-                textposition='auto'
-            )
+        model_df = pd.DataFrame([
+            {
+                "Model": model,
+                "Requests": stats["count"],
+                "Total Tokens": f"{stats['tokens']:,}",
+                "Total Cost": f"${stats['cost']:.6f}",
+                "Avg Tokens/Request": f"{stats['tokens'] // stats['count']:,}"
+            }
+            for model, stats in model_stats.items()
         ])
         
-        fig.update_layout(
-            title="Cost per Million Tokens",
-            yaxis_title="Cost ($) per 1M Tokens",
-            barmode='group',
-            height=400,
-            showlegend=True
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.success(f"✅ You saved **${savings:.6f} ({savings_percent:.1f}%)** by using optimized model assignment!")
-    else:
-        st.info("Run a multi-agent enhancement to see cost comparisons")
+        st.dataframe(model_df, use_container_width=True, hide_index=True)
     
+    except Exception as e:
+        st.error(f"❌ Error loading token history: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+
+def show_token_analytics_old():
+    """OLD VERSION - Kept for reference, not used"""
     # Temporal Analysis Widget (Week 12)
     st.markdown("---")
     st.subheader("⏱️ Token Usage Trends Over Time")

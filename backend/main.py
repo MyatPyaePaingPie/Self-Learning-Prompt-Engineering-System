@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
 import os
 import sys
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -22,6 +23,10 @@ if str(project_root) not in sys.path:
 
 # Load .env from project root (not backend/.env)
 load_dotenv(project_root / '.env')
+
+# Initialize logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Now import from backend modules
 from database import get_db, User
@@ -295,6 +300,44 @@ async def get_user_prompts(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/tokens")
+async def get_user_token_history(
+    current_user: User = Depends(get_current_user),
+    limit: int = 100
+):
+    """
+    Get authenticated user's token usage history (Database-First Pattern 2025-12-04).
+    Returns all token records for the user across all prompts and versions.
+    """
+    try:
+        from packages.db.crud import get_token_usage_by_user
+        
+        with get_session() as session:
+            token_records = get_token_usage_by_user(session, str(current_user.id), limit=limit)
+            
+            return {
+                "success": True,
+                "data": [
+                    {
+                        "id": str(record.id),
+                        "prompt_version_id": str(record.prompt_version_id),
+                        "prompt_tokens": record.prompt_tokens,
+                        "completion_tokens": record.completion_tokens,
+                        "total_tokens": record.total_tokens,
+                        "model": record.model,
+                        "cost_usd": record.cost_usd,
+                        "created_at": record.created_at.isoformat()
+                    }
+                    for record in token_records
+                ],
+                "total_records": len(token_records),
+                "total_tokens": sum(r.total_tokens for r in token_records),
+                "total_cost": sum(r.cost_usd for r in token_records)
+            }
+    except Exception as e:
+        logger.error(f"Failed to get token history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get token history: {str(e)}")
+
 @app.post("/prompts/save")
 @limiter.limit("20/minute")
 async def save_prompt(
@@ -389,8 +432,10 @@ async def multi_agent_enhance(
         request_id = str(uuid.uuid4())
         
         # SAVE PROMPT TO DATABASE WITH USER_ID AND REQUEST_ID
-        from packages.db.crud import create_prompt_row, create_version_row, create_judge_score_row
+        from packages.db.crud import create_prompt_row, create_version_row, create_judge_score_row, create_token_usage_row
         from packages.core.judge import Scorecard
+        from packages.core.token_tracker import TokenUsage
+        from datetime import datetime
         
         with get_session() as session:
             # Create prompt record with user_id and request_id
@@ -411,6 +456,21 @@ async def multi_agent_enhance(
                 source="user_input"
             )
             
+            # SAVE TOKEN USAGE FOR ORIGINAL PROMPT (Database-First Pattern 2025-12-04)
+            # Track original prompt tokens (estimate based on text)
+            from packages.core.token_tracker import TokenTracker
+            tracker = TokenTracker()
+            original_tokens = tracker.count_tokens(prompt_data.text)
+            original_token_usage = TokenUsage(
+                prompt_tokens=original_tokens,
+                completion_tokens=0,  # No completion for original (just the prompt itself)
+                total_tokens=original_tokens,
+                model="user_input",  # Source is user input
+                timestamp=datetime.now(),
+                cost_usd=0.0  # No cost for user input
+            )
+            create_token_usage_row(session, original_version.id, original_token_usage)
+            
             # Create version for enhanced prompt
             enhanced_version = create_version_row(
                 session=session,
@@ -424,6 +484,20 @@ async def multi_agent_enhance(
                 },
                 source="multi_agent"
             )
+            
+            # SAVE TOKEN USAGE FOR ENHANCED VERSION (Database-First Pattern 2025-12-04)
+            # Save token usage for enhanced version if available
+            if decision.token_usage and decision.total_tokens and decision.total_cost_usd:
+                # Create aggregate TokenUsage object for enhanced version
+                enhanced_token_usage = TokenUsage(
+                    prompt_tokens=decision.total_tokens // 2,  # Rough estimate (half prompt, half completion)
+                    completion_tokens=decision.total_tokens - (decision.total_tokens // 2),
+                    total_tokens=decision.total_tokens,
+                    model=decision.selected_agent,  # Track winning agent as "model"
+                    timestamp=datetime.now(),
+                    cost_usd=decision.total_cost_usd
+                )
+                create_token_usage_row(session, enhanced_version.id, enhanced_token_usage)
             
             session.commit()
             prompt_id = str(prompt.id)
@@ -483,6 +557,11 @@ async def record_user_feedback(
     """
     Record user feedback on multi-agent results (Darwinian Evolution - Phase 1).
     
+    Database-First Pattern (2025-12-04):
+    - Saves feedback to PostgreSQL (not CSV)
+    - Links feedback to prompt via request_id
+    - User-specific feedback tracking
+    
     This endpoint enables the system to learn from user preferences by tracking
     which enhancement method (original, single-agent, or multi-agent) the user
     found most effective. This data is used to:
@@ -491,9 +570,6 @@ async def record_user_feedback(
     - Improve system performance through evolutionary learning
     """
     try:
-        # Get file storage
-        storage = get_file_storage()
-        
         # Validate inputs
         if feedback.user_choice not in ["original", "single", "multi"]:
             raise HTTPException(
@@ -501,20 +577,38 @@ async def record_user_feedback(
                 detail="Invalid user_choice. Must be 'original', 'single', or 'multi'"
             )
         
-        # Record feedback in CSV
-        success = storage.record_feedback(
-            request_id=feedback.request_id,
-            user_choice=feedback.user_choice,
-            judge_winner=feedback.judge_winner,
-            agent_winner=feedback.agent_winner
-        )
+        # Database-First Pattern: Save to PostgreSQL (not CSV)
+        from packages.db.crud import create_feedback_row, get_prompt_by_request_id
         
-        if not success:
-            # Check if request_id exists
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Request ID not found: {feedback.request_id}"
+        with get_session() as session:
+            # Find prompt by request_id
+            prompt = get_prompt_by_request_id(session, feedback.request_id)
+            
+            if not prompt:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Request ID not found: {feedback.request_id}"
+                )
+            
+            # Verify prompt belongs to current user (security)
+            if prompt.user_id != str(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot submit feedback for another user's prompt"
+                )
+            
+            # Create feedback record in database
+            feedback_record = create_feedback_row(
+                session=session,
+                request_id=feedback.request_id,
+                user_id=str(current_user.id),
+                prompt_id=prompt.id,
+                user_choice=feedback.user_choice,
+                judge_winner=feedback.judge_winner,
+                agent_winner=feedback.agent_winner
             )
+            
+            session.commit()
         
         return {
             "success": True,
@@ -571,10 +665,22 @@ async def get_available_agents(current_user: User = Depends(get_current_user)):
 
 @app.get("/prompts/agent-effectiveness")
 async def get_agent_effectiveness(current_user: User = Depends(get_current_user)):
-    """Get agent effectiveness statistics (Week 11 - Phase 2)."""
+    """
+    Get agent effectiveness statistics (Week 11 - Phase 2).
+    
+    Database-First Pattern (2025-12-04):
+    - Reads from user_feedback table in PostgreSQL
+    - No longer uses CSV files
+    - User-specific data only
+    """
     try:
-        file_storage = get_file_storage()
-        effectiveness = file_storage.get_agent_effectiveness()
+        from packages.db.crud import get_agent_effectiveness_from_feedback
+        
+        with get_session() as session:
+            effectiveness = get_agent_effectiveness_from_feedback(
+                session=session,
+                user_id=str(current_user.id)
+            )
         
         return {
             "success": True,

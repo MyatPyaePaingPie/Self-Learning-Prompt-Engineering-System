@@ -1,7 +1,8 @@
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
-from .models import Prompt, PromptVersion, JudgeScore, BestHead, SecurityInput, UserFeedback
+from .models import Prompt, PromptVersion, JudgeScore, BestHead, SecurityInput, UserFeedback, TokenUsageRecord
 from packages.core.judge import Scorecard
+from packages.core.token_tracker import TokenUsage
 import uuid
 
 def create_prompt_row(session: Session, user_id: str | None, original_text: str, request_id: str | None = None) -> Prompt:
@@ -45,6 +46,49 @@ def create_judge_score_row(session: Session, version_id: uuid.UUID, scorecard: S
     session.add(score)
     session.flush()  # Get the ID without committing
     return score
+
+def create_token_usage_row(session: Session, version_id: uuid.UUID, usage: TokenUsage) -> TokenUsageRecord:
+    """Create a new token usage record (Database-First Pattern 2025-12-04)"""
+    token_record = TokenUsageRecord(
+        prompt_version_id=version_id,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        model=usage.model,
+        cost_usd=usage.cost_usd
+    )
+    session.add(token_record)
+    session.flush()  # Get the ID without committing
+    return token_record
+
+def get_token_usage_by_version(session: Session, version_id: uuid.UUID) -> TokenUsageRecord | None:
+    """Get token usage for a specific prompt version"""
+    return session.execute(
+        sa.select(TokenUsageRecord).where(TokenUsageRecord.prompt_version_id == version_id)
+    ).scalar_one_or_none()
+
+def get_token_usage_by_prompt(session: Session, prompt_id: uuid.UUID, limit: int = 100) -> list[TokenUsageRecord]:
+    """Get all token usage records for a prompt (across all versions)"""
+    # Join with prompt_versions to filter by prompt_id
+    return session.execute(
+        sa.select(TokenUsageRecord)
+        .join(PromptVersion, TokenUsageRecord.prompt_version_id == PromptVersion.id)
+        .where(PromptVersion.prompt_id == prompt_id)
+        .order_by(TokenUsageRecord.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
+
+def get_token_usage_by_user(session: Session, user_id: str, limit: int = 100) -> list[TokenUsageRecord]:
+    """Get all token usage records for a specific user (USER-SPECIFIC)"""
+    # Join through prompt_versions and prompts to filter by user_id
+    return session.execute(
+        sa.select(TokenUsageRecord)
+        .join(PromptVersion, TokenUsageRecord.prompt_version_id == PromptVersion.id)
+        .join(Prompt, PromptVersion.prompt_id == Prompt.id)
+        .where(Prompt.user_id == user_id)
+        .order_by(TokenUsageRecord.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
 
 def maybe_update_best_head(session: Session, prompt_id: uuid.UUID, version_id: uuid.UUID, score: float):
     """Update best head if score is better than current best"""
