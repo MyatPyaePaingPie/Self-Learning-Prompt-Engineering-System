@@ -1,4 +1,0 @@
-prompt_id,llm_name,prompt,original_response,rewritten_prompt,rewritten_response,learning_memory,timestamp
-001,GPT-4,Write a function to validate email addresses,Here is a basic regex validation function...,,,Basic validation works but lacks comprehensive error handling,2025-10-03T11:21:49.615551
-001.1,GPT-4,"Write a comprehensive email validation function in Python with detailed error messages, support for international domains, and unit tests",Here is a robust email validator with comprehensive testing...,,,Adding specific requirements for error handling and testing greatly improves response quality,2025-10-03T11:21:49.615796
-002,Claude-3,Create a REST API for user management,Here is a basic Flask API...,,,Simple REST API request yielded basic implementation,2025-10-03T11:21:49.615937

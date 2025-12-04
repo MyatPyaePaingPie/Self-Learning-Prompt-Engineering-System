@@ -1,4 +1,0 @@
-prompt_id,llm_name,prompt,original_response,rewritten_prompt,rewritten_response,learning_memory,timestamp
-001,GPT-4,Write a Python function to calculate fibonacci numbers,Here is a basic recursive implementation...,,,Basic prompt yielded simple recursive solution,2025-10-03T11:21:32.567800
-001.1,GPT-4,"Write an efficient Python function to calculate fibonacci numbers using dynamic programming, include error handling and docstring",Here is an optimized implementation with memoization...,,,Adding specific requirements about efficiency and documentation improves response quality significantly,2025-10-03T11:21:32.567941
-002,Claude-3,Implement a sorting algorithm,Here is bubble sort...,Implement merge sort algorithm in Python with time complexity analysis and unit tests,Here is an efficient merge sort implementation...,Specific algorithm requests with analysis requirements yield better educational content,2025-10-03T11:21:32.568049
