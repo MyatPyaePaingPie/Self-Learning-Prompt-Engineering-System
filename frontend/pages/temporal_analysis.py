@@ -112,11 +112,11 @@ def show_temporal_analysis():
                         legend_title="Change Type"
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Data table
                     with st.expander("📋 View Raw Data"):
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, width='stretch', hide_index=True)
             else:
                 st.error(f"❌ Error loading timeline: {timeline_result['error']}")
         
@@ -182,7 +182,7 @@ def show_temporal_analysis():
                     df_hints = pd.DataFrame(hints)
                     df_hints = df_hints.sort_values('avg_score_delta', ascending=False)
                     
-                    st.dataframe(df_hints, use_container_width=True, hide_index=True)
+                    st.dataframe(df_hints, width='stretch', hide_index=True)
                     
                     # Interpretation
                     if not df_hints.empty:

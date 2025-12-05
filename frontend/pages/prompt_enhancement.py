@@ -244,7 +244,7 @@ def display_three_way_results(
         
         # Prompt
         with st.expander("View Prompt", expanded=False):
-            st.text_area("Prompt", value=original_prompt, height=100, disabled=True, key="orig_prompt_comp", label_visibility="hidden")
+            st.text_area("Original Prompt", value=original_prompt, height=100, disabled=True, key="orig_prompt_comp", label_visibility="hidden")
         
         # Score
         st.metric("Quality Score", f"{original_score.total:.1f}/50", help="Judge evaluation")
@@ -252,7 +252,7 @@ def display_three_way_results(
         # LLM Output preview
         st.write("**LLM Response (preview):**")
         output_preview = original_output[:200] + ("..." if len(original_output) > 200 else "")
-        st.text_area("LLM Output Preview", value=output_preview, height=100, disabled=True, key="orig_output_comp", label_visibility="hidden")
+        st.text_area("Original LLM Output Preview", value=output_preview, height=100, disabled=True, key="orig_output_comp", label_visibility="hidden")
         
         # Cost
         total_cost = original_usage.cost_usd + original_judge_usage.cost_usd
@@ -265,7 +265,7 @@ def display_three_way_results(
         
         # Prompt
         with st.expander("View Enhanced Prompt", expanded=False):
-            st.text_area("Prompt", value=single_enhanced, height=100, disabled=True, key="single_prompt_comp", label_visibility="hidden")
+            st.text_area("Single-Agent Enhanced Prompt", value=single_enhanced, height=100, disabled=True, key="single_prompt_comp", label_visibility="hidden")
         
         # Score with delta
         improvement = single_score.total - original_score.total
@@ -274,7 +274,7 @@ def display_three_way_results(
         # LLM Output preview
         st.write("**LLM Response (preview):**")
         output_preview = single_output[:200] + ("..." if len(single_output) > 200 else "")
-        st.text_area("LLM Output Preview", value=output_preview, height=100, disabled=True, key="single_output_comp", label_visibility="hidden")
+        st.text_area("Single-Agent LLM Output Preview", value=output_preview, height=100, disabled=True, key="single_output_comp", label_visibility="hidden")
         
         # Cost
         total_cost = single_usage.cost_usd + single_judge_usage.cost_usd
@@ -288,7 +288,7 @@ def display_three_way_results(
         
         # Prompt
         with st.expander("View Enhanced Prompt", expanded=False):
-            st.text_area("Prompt", value=multi_enhanced, height=100, disabled=True, key="multi_prompt_comp", label_visibility="hidden")
+            st.text_area("Multi-Agent Enhanced Prompt", value=multi_enhanced, height=100, disabled=True, key="multi_prompt_comp", label_visibility="hidden")
         
         # Score with delta (compare to single-agent)
         improvement_vs_original = multi_score.total - original_score.total
@@ -303,7 +303,7 @@ def display_three_way_results(
         # LLM Output preview
         st.write("**LLM Response (preview):**")
         output_preview = multi_output[:200] + ("..." if len(multi_output) > 200 else "")
-        st.text_area("LLM Output Preview", value=output_preview, height=100, disabled=True, key="multi_output_comp", label_visibility="hidden")
+        st.text_area("Multi-Agent LLM Output Preview", value=output_preview, height=100, disabled=True, key="multi_output_comp", label_visibility="hidden")
         
         # Cost
         total_cost = multi_usage.cost_usd + multi_judge_usage.cost_usd

@@ -83,13 +83,14 @@ def show_token_analytics():
             
             table_data["Date"].append(formatted_date)
             table_data["Model"].append(record["model"])
-            table_data["Prompt Tokens"].append(record["prompt_tokens"])
-            table_data["Completion Tokens"].append(record["completion_tokens"])
-            table_data["Total Tokens"].append(record["total_tokens"])
-            table_data["Cost (USD)"].append(f"${record['cost_usd']:.6f}")
+            # Ensure numeric types (convert None or invalid to 0)
+            table_data["Prompt Tokens"].append(int(record.get("prompt_tokens", 0) or 0))
+            table_data["Completion Tokens"].append(int(record.get("completion_tokens", 0) or 0))
+            table_data["Total Tokens"].append(int(record.get("total_tokens", 0) or 0))
+            table_data["Cost (USD)"].append(f"${record.get('cost_usd', 0.0):.6f}")
         
         df = pd.DataFrame(table_data)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
         
         # Token usage over time chart
         st.subheader("📈 Token Usage Over Time")
@@ -114,7 +115,7 @@ def show_token_analytics():
             yaxis_title="Total Tokens"
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Model breakdown
         st.subheader("🤖 Usage by Model")
@@ -139,7 +140,7 @@ def show_token_analytics():
             for model, stats in model_stats.items()
         ])
         
-        st.dataframe(model_df, use_container_width=True, hide_index=True)
+        st.dataframe(model_df, width='stretch', hide_index=True)
     
     except Exception as e:
         st.error(f"❌ Error loading token history: {str(e)}")
