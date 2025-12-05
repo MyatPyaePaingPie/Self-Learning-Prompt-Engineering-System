@@ -17,6 +17,7 @@ from packages.db.crud import (
     create_judge_score_row,
     create_token_usage_row,
     create_feedback_row,
+    create_security_input_row,
     get_prompt_by_request_id,
     get_agent_effectiveness_from_feedback,
     get_token_usage_by_user,
@@ -33,6 +34,7 @@ from packages.core.agent_registry import AgentRegistry
 from packages.core.agent_coordinator import AgentCoordinator
 from packages.core.judge import Scorecard
 from packages.core.token_tracker import TokenTracker, TokenUsage
+from packages.core.security_analyzer import SecurityAnalyzer, SecurityAssessment
 from storage.file_storage import FileStorage
 
 # Initialize logger
@@ -220,6 +222,35 @@ async def enhance_prompt(
 ):
     """Enhance a text prompt using AI optimization techniques."""
     try:
+        # SECURITY ANALYSIS (Phase 2 - 2025-12-05)
+        analyzer = SecurityAnalyzer()
+        security_assessment = analyzer.analyze(prompt_data.text)
+        
+        # Save security input to database (PT:2 Database-First)
+        with get_session() as session:
+            create_security_input_row(
+                session=session,
+                user_id=str(current_user.id),
+                input_text=prompt_data.text,
+                risk_score=security_assessment.risk_score,
+                label=security_assessment.label,
+                is_blocked=security_assessment.is_blocked,
+                analysis_metadata=security_assessment.analysis_metadata
+            )
+            session.commit()
+        
+        # Block high-risk prompts
+        if security_assessment.is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Security Risk Detected",
+                    "message": f"This prompt has been flagged as {security_assessment.label} (risk score: {security_assessment.risk_score:.1f}).",
+                    "risk_score": security_assessment.risk_score,
+                    "label": security_assessment.label
+                }
+            )
+        
         # Encrypt the original prompt for storage
         encrypted_text = encrypt_sensitive_data(prompt_data.text)
         
@@ -322,6 +353,35 @@ async def save_prompt(
 ):
     """Save a prompt to user's collection."""
     try:
+        # SECURITY ANALYSIS (Phase 2 - 2025-12-05)
+        analyzer = SecurityAnalyzer()
+        security_assessment = analyzer.analyze(prompt_data.text)
+        
+        # Save security input to database (PT:2 Database-First)
+        with get_session() as session:
+            create_security_input_row(
+                session=session,
+                user_id=str(current_user.id),
+                input_text=prompt_data.text,
+                risk_score=security_assessment.risk_score,
+                label=security_assessment.label,
+                is_blocked=security_assessment.is_blocked,
+                analysis_metadata=security_assessment.analysis_metadata
+            )
+            session.commit()
+        
+        # Block high-risk prompts
+        if security_assessment.is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Security Risk Detected",
+                    "message": f"Cannot save high-risk prompt (risk score: {security_assessment.risk_score:.1f}).",
+                    "risk_score": security_assessment.risk_score,
+                    "label": security_assessment.label
+                }
+            )
+        
         # Encrypt sensitive prompt data
         encrypted_text = encrypt_sensitive_data(prompt_data.text)
         
@@ -367,6 +427,37 @@ async def multi_agent_enhance(
 ):
     """Enhance prompt using multi-agent collaboration (Week 11)."""
     try:
+        # SECURITY ANALYSIS (Phase 2 - 2025-12-05)
+        # Analyze prompt for security risks BEFORE LLM processing
+        analyzer = SecurityAnalyzer()  # Uses default keywords and threshold=80
+        security_assessment = analyzer.analyze(prompt_data.text)
+        
+        # Save security input to database (PT:2 Database-First)
+        with get_session() as session:
+            create_security_input_row(
+                session=session,
+                user_id=str(current_user.id),
+                input_text=prompt_data.text,
+                risk_score=security_assessment.risk_score,
+                label=security_assessment.label,
+                is_blocked=security_assessment.is_blocked,
+                analysis_metadata=security_assessment.analysis_metadata
+            )
+            session.commit()
+        
+        # Block high-risk prompts (risk_score >= 80)
+        if security_assessment.is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Security Risk Detected",
+                    "message": f"This prompt has been flagged as {security_assessment.label} (risk score: {security_assessment.risk_score:.1f}).",
+                    "risk_score": security_assessment.risk_score,
+                    "label": security_assessment.label,
+                    "matched_keywords": security_assessment.analysis_metadata.get("matched_keywords", {})
+                }
+            )
+        
         # Get coordinator (uses registry internally)
         coordinator = get_multi_agent_coordinator()
         decision = await coordinator.coordinate(prompt_data.text)

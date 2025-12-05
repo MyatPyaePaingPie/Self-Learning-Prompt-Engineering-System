@@ -21,6 +21,25 @@ def show_security_dashboard():
     
     # Sidebar filters
     with st.sidebar:
+        # Configuration section (Phase 3 - 2025-12-05)
+        st.header("⚙️ Configuration")
+        
+        # Blocking threshold slider
+        blocking_threshold = st.slider(
+            "Blocking Threshold",
+            min_value=0,
+            max_value=100,
+            value=80,
+            step=5,
+            help="Risk scores at or above this threshold will be blocked"
+        )
+        
+        st.caption(f"Current threshold: **{blocking_threshold}** (prompts with risk ≥ {blocking_threshold} will be blocked)")
+        st.info("ℹ️ **Note:** Changes apply to future prompts only. Existing security inputs are not affected.")
+        
+        st.markdown("---")
+        
+        # Filters section
         st.header("🔍 Filters")
         
         filter_label = st.selectbox(
@@ -59,27 +78,109 @@ def show_security_dashboard():
             if not inputs:
                 st.info("No security inputs found matching the selected filters.")
             else:
-                # Summary metrics
-                st.subheader("📊 Summary Metrics")
+                # Security Effectiveness section with period selector (Phase 3 - 2025-12-05)
+                st.subheader("📊 Security Effectiveness")
+                
+                # Period selector
+                period_col1, period_col2 = st.columns([1, 3])
+                with period_col1:
+                    period = st.selectbox(
+                        "Time Period",
+                        ["Last 24h", "Last 7d", "Last 30d", "All Time"],
+                        index=3
+                    )
+                
+                # Filter inputs by period
+                from datetime import datetime, timedelta
+                now = datetime.now()
+                
+                if period == "Last 24h":
+                    cutoff = now - timedelta(hours=24)
+                elif period == "Last 7d":
+                    cutoff = now - timedelta(days=7)
+                elif period == "Last 30d":
+                    cutoff = now - timedelta(days=30)
+                else:
+                    cutoff = None
+                
+                # Apply period filter
+                period_filtered_inputs = inputs
+                if cutoff:
+                    period_filtered_inputs = []
+                    for inp in inputs:
+                        try:
+                            timestamp = datetime.fromisoformat(inp.get("createdAt", "").replace("Z", "+00:00"))
+                            if timestamp.replace(tzinfo=None) >= cutoff:
+                                period_filtered_inputs.append(inp)
+                        except:
+                            continue
+                
+                # Use period-filtered inputs for metrics
+                inputs_for_metrics = period_filtered_inputs
                 
                 col1, col2, col3, col4 = st.columns(4)
                 
-                total_inputs = len(inputs)
-                blocked_count = sum(1 for inp in inputs if inp.get("isBlocked", False))
-                high_risk_count = sum(1 for inp in inputs if inp.get("riskScore", 0) >= 70)
-                avg_risk_score = sum(inp.get("riskScore", 0) for inp in inputs) / total_inputs if total_inputs > 0 else 0
+                total_inputs = len(inputs_for_metrics)
+                blocked_count = sum(1 for inp in inputs_for_metrics if inp.get("isBlocked", False))
+                high_risk_count = sum(1 for inp in inputs_for_metrics if inp.get("riskScore", 0) >= 70)
+                avg_risk_score = sum(inp.get("riskScore", 0) for inp in inputs_for_metrics) / total_inputs if total_inputs > 0 else 0
+                blocked_rate = (blocked_count / total_inputs * 100) if total_inputs > 0 else 0
                 
                 with col1:
-                    st.metric("Total Inputs", total_inputs)
+                    st.metric("Total Analyzed", total_inputs)
                 
                 with col2:
-                    st.metric("Blocked", blocked_count)
+                    st.metric("Blocked Rate", f"{blocked_rate:.1f}%")
                 
                 with col3:
                     st.metric("High-Risk (≥70)", high_risk_count)
                 
                 with col4:
                     st.metric("Avg Risk Score", f"{avg_risk_score:.1f}")
+                
+                st.divider()
+                
+                # Risk Distribution Chart (Phase 3 - 2025-12-05)
+                st.subheader("📈 Risk Distribution")
+                
+                # Calculate distribution by category
+                distribution = {
+                    "safe": 0,
+                    "low-risk": 0,
+                    "medium-risk": 0,
+                    "high-risk": 0
+                }
+                
+                for inp in inputs:
+                    label = inp.get("label", "safe")
+                    if label in distribution:
+                        distribution[label] += 1
+                
+                # Create bar chart
+                dist_df = pd.DataFrame({
+                    'Category': list(distribution.keys()),
+                    'Count': list(distribution.values())
+                })
+                
+                # Color mapping (green, yellow, orange, red)
+                color_map = {
+                    'safe': '#28a745',        # green
+                    'low-risk': '#ffc107',    # yellow
+                    'medium-risk': '#fd7e14',  # orange
+                    'high-risk': '#dc3545'     # red
+                }
+                
+                fig_dist = px.bar(
+                    dist_df,
+                    x='Category',
+                    y='Count',
+                    title='Security Inputs by Risk Category',
+                    labels={'Count': 'Number of Inputs', 'Category': 'Risk Category'},
+                    color='Category',
+                    color_discrete_map=color_map
+                )
+                
+                st.plotly_chart(fig_dist, use_container_width=True)
                 
                 st.divider()
                 
