@@ -104,7 +104,7 @@ def show_agent_effectiveness():
                 st.metric("Avg Cost/1K Tokens", f"${avg_cost_per_1k:.4f}")
             
             # Display table
-            st.dataframe(df_tokens, use_container_width=True, hide_index=True)
+            st.dataframe(df_tokens, width='stretch', hide_index=True)
             
             # Token efficiency chart
             fig = go.Figure(data=[
@@ -125,7 +125,7 @@ def show_agent_effectiveness():
                 showlegend=False
             )
             
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             
             st.info("💡 Lower token usage = lower costs. Fast models (8B) use fewer tokens than powerful models (70B).")
         else:
@@ -183,7 +183,7 @@ def show_agent_effectiveness():
                     feedback_data["Judge Accuracy"].append(f"{stats.get('judge_accuracy', 0):.0%}")
             
             df_feedback = pd.DataFrame(feedback_data)
-            st.dataframe(df_feedback, use_container_width=True, hide_index=True)
+            st.dataframe(df_feedback, width='stretch', hide_index=True)
             
             st.caption("**Judge Wins:** How often the judge selected this agent")
             st.caption("**User Wins:** How often users validated this agent's superiority")
@@ -305,5 +305,5 @@ def display_effectiveness_table(effectiveness):
     # Sort by wins descending
     df = df.sort_values("Wins", ascending=False)
     
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    st.dataframe(df, hide_index=True, width='stretch')
 

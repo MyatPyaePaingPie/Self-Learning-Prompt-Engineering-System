@@ -93,27 +93,27 @@ def show_navigation_sidebar():
     # Navigation buttons
     st.subheader("🧭 Navigation")
     
-    if st.button("📊 Dashboard", key="nav_dashboard", use_container_width=True):
+    if st.button("📊 Dashboard", key="nav_dashboard", width='stretch'):
         st.session_state.current_page = "dashboard"
         st.rerun()
     
-    if st.button("📈 Agent Effectiveness", key="nav_effectiveness", use_container_width=True):
+    if st.button("📈 Agent Effectiveness", key="nav_effectiveness", width='stretch'):
         st.session_state.current_page = "agent_effectiveness"
         st.rerun()
     
-    if st.button("💰 Token Analytics", key="nav_tokens", use_container_width=True):
+    if st.button("💰 Token Analytics", key="nav_tokens", width='stretch'):
         st.session_state.current_page = "token_analytics"
         st.rerun()
     
-    if st.button("🔒 Security Dashboard", key="nav_security", use_container_width=True):
+    if st.button("🔒 Security Dashboard", key="nav_security", width='stretch'):
         st.session_state.current_page = "security_dashboard"
         st.rerun()
     
-    if st.button("⏱️ Temporal Analysis", key="nav_temporal", use_container_width=True):
+    if st.button("⏱️ Temporal Analysis", key="nav_temporal", width='stretch'):
         st.session_state.current_page = "temporal_analysis"
         st.rerun()
         
-    if st.button("🔧 API Testing", key="nav_api", use_container_width=True):
+    if st.button("🔧 API Testing", key="nav_api", width='stretch'):
         st.session_state.current_page = "api_test"
         st.rerun()
     
@@ -125,7 +125,7 @@ def show_navigation_sidebar():
     st.success("🔄 End-to-End Encrypted")
     st.success("✅ Rate Limited")
     
-    if st.button("🚪 Logout", type="primary", use_container_width=True):
+    if st.button("🚪 Logout", type="primary", width='stretch'):
         logout()
 
 
