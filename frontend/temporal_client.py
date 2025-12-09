@@ -263,3 +263,4 @@ def init_temporal_client(token: str = None) -> TemporalClient:
     """
     return TemporalClient(token=token)
 
+

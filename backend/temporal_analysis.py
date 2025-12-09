@@ -171,3 +171,4 @@ def compute_score_velocity(scores: List[float], timestamps: List[datetime]) -> f
     
     return total_change / time_span
 
+

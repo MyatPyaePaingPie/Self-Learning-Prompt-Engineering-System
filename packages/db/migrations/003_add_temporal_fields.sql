@@ -18,3 +18,4 @@ CREATE INDEX idx_prompt_versions_parent ON prompt_versions(parent_version_id);
 -- Create index on created_at for temporal queries
 CREATE INDEX idx_prompt_versions_created_at ON prompt_versions(created_at);
 
+
