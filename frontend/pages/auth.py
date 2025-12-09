@@ -91,3 +91,4 @@ def show_login_page():
                         else:
                             st.error(f"❌ Registration failed: {result['error']}")
 
+

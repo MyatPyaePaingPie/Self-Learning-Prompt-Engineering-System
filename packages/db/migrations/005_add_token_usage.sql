@@ -18,3 +18,4 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_prompt_version_id ON token_usage(prom
 CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model);
 CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at);
 
+
